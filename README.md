@@ -439,3 +439,4 @@ Add-ons:
 Made with ❤️ by the Coach Platform Team
 
 </div>
+# Auto-deployment configured! 🚀
