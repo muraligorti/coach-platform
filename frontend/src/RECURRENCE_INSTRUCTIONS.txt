@@ -1,0 +1,76 @@
+
+TO ADD DAILY RECURRENCE TO SCHEDULE SESSION MODAL:
+
+1. Find the ScheduleSessionModal component in App.jsx
+
+2. In the useState for formData, add:
+   recurrence_type: 'once',
+   num_sessions: 1,
+   
+3. After the "Location" dropdown, add this field:
+
+        <div>
+          <label className="block text-sm font-medium mb-2">Recurrence</label>
+          <select value={formData.recurrence_type}
+            onChange={(e) => setFormData({...formData, recurrence_type: e.target.value})}
+            className="w-full px-4 py-3 rounded-xl border outline-none">
+            <option value="once">One-time session</option>
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="biweekly">Bi-weekly (every 2 weeks)</option>
+            <option value="monthly">Monthly</option>
+          </select>
+        </div>
+
+        {formData.recurrence_type !== 'once' && (
+          <div>
+            <label className="block text-sm font-medium mb-2">Number of Sessions</label>
+            <input type="number" min="1" max="52" value={formData.num_sessions}
+              onChange={(e) => setFormData({...formData, num_sessions: parseInt(e.target.value) || 1})}
+              className="w-full px-4 py-3 rounded-xl border outline-none"
+              placeholder="e.g., 10 for 10 sessions" />
+            <div className="text-xs text-slate-600 mt-1">
+              Will create {formData.num_sessions} {formData.recurrence_type} sessions
+            </div>
+          </div>
+        )}
+
+4. Update the handleSubmit to use the new recurring endpoint when recurrence_type !== 'once':
+
+   const handleSubmit = async (e) => {
+     e.preventDefault();
+     setLoading(true);
+     try {
+       let result;
+       
+       if (formData.recurrence_type !== 'once') {
+         // Use recurring endpoint
+         const [date, time] = formData.scheduled_at.split('T');
+         result = await api.request('/sessions/create-recurring', {
+           method: 'POST',
+           body: JSON.stringify({
+             client_id: formData.client_id,
+             recurrence_type: formData.recurrence_type,
+             start_date: date,
+             time: time || '09:00',
+             num_sessions: formData.num_sessions,
+             duration_minutes: formData.duration_minutes,
+             location: formData.location_type,
+             notes: formData.notes
+           })
+         });
+       } else {
+         // Use regular endpoint
+         result = await api.createSession(formData);
+       }
+       
+       if (result.success) {
+         alert(result.message || 'Sessions created!');
+         onSuccess();
+         onClose();
+       }
+     } finally {
+       setLoading(false);
+     }
+   };
+
