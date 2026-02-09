@@ -35,3 +35,4 @@ logs/
 *.backup
 *_broken_backup.py
 *before*.jsx
+.azure-credentials.json
