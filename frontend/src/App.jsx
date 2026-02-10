@@ -66,6 +66,24 @@ const api = {
     return this.request(`/workouts/library?coach_id=${coachId}`, { method: 'POST', body: JSON.stringify(data) }); 
   },
   async assignWorkout(data) { return this.request('/workouts/assign-to-client', { method: 'POST', body: JSON.stringify(data) }); },
+  async cancelSession(sessionId, reason, cancelledBy = 'coach') {
+    return this.request(`/sessions/${sessionId}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ reason, cancelled_by: cancelledBy })
+    });
+  },
+  async markAttendance(sessionId, status, notes = null) {
+    return this.request(`/sessions/${sessionId}/mark-attendance`, {
+      method: 'POST',
+      body: JSON.stringify({ status, notes })
+    });
+  },
+  async createRecurringSessions(data) {
+    return this.request('/sessions/create-recurring', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+  },
   async getNutritionPlans() { return this.request('/nutrition/plans'); },
   async createNutritionPlan(data) { return this.request('/nutrition/plans', { method: 'POST', body: JSON.stringify(data) }); },
   async assignNutrition(planId, clientId, startDate, coachId) {
