@@ -1067,7 +1067,7 @@ const AddClientModal = ({ isOpen, onClose, onSuccess }) => {
 
 const ScheduleSessionModal = ({ isOpen, onClose, onSuccess, clients }) => {
   const [formData, setFormData] = useState({
-    client_id: '', scheduled_at: '', duration_minutes: 60, location_type: 'online', notes: ''
+    client_id: '', scheduled_at: '', duration_minutes: 60, location_type: 'online', notes: '',recurrence_type: 'once',num_sessions: 1
   });
   const [loading, setLoading] = useState(false);
 
@@ -1109,6 +1109,28 @@ const ScheduleSessionModal = ({ isOpen, onClose, onSuccess, clients }) => {
               <option value="offline">Offline</option>
             </select>
           </div>
+          <div>
+            <label className="block text-sm font-medium mb-2">Recurrence</label>
+            <select value={formData.recurrence_type}
+              onChange={(e) => setFormData({...formData, recurrence_type: e.target.value})}
+              className="w-full px-4 py-3 rounded-xl border outline-none">
+              <option value="once">One-time session</option>
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="biweekly">Bi-weekly</option>
+              <option value="monthly">Monthly</option>
+            </select>
+          </div>
+          
+          {formData.recurrence_type !== 'once' && (
+            <div>
+              <label className="block text-sm font-medium mb-2">Number of Sessions</label>
+              <input type="number" min="1" max="52" value={formData.num_sessions}
+                onChange={(e) => setFormData({...formData, num_sessions: parseInt(e.target.value) || 1})}
+                className="w-full px-4 py-3 rounded-xl border outline-none"
+                placeholder="e.g., 10 sessions" />
+            </div>
+          )}
         </div>
         <div className="flex gap-3">
           <button type="button" onClick={onClose} className="flex-1 px-4 py-3 rounded-xl border">Cancel</button>
@@ -1126,16 +1148,36 @@ const CreatePaymentLinkModal = ({ isOpen, onClose, clients }) => {
   const [loading, setLoading] = useState(false);
   const [paymentLink, setPaymentLink] = useState('');
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    try {
-      const result = await api.createPaymentLink(formData);
-      if (result.success) setPaymentLink(result.payment_link);
-    } finally {
-      setLoading(false);
+const handleSubmit = async (e) => {
+  e.preventDefault();
+  setLoading(true);
+  try {
+    let result;
+    
+    if (formData.recurrence_type !== 'once') {
+      const [date, time] = formData.scheduled_at.split('T');
+      result = await api.createRecurringSessions({
+        client_id: formData.client_id,
+        recurrence_type: formData.recurrence_type,
+        start_date: date,
+        time: time || '09:00',
+        num_sessions: formData.num_sessions,
+        duration_minutes: formData.duration_minutes,
+        location: formData.location_type
+      });
+    } else {
+      result = await api.createSession(formData);
     }
-  };
+    
+    if (result.success) {
+      alert(result.message || 'Session(s) created!');
+      onSuccess();
+      onClose();
+    }
+  } finally {
+    setLoading(false);
+  }
+};
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Create Payment Link">
