@@ -2013,3 +2013,167 @@ async def create_recurring_sessions(data: RecurringSessionCreate):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# ============================================================================
+# SESSION MANAGEMENT - CANCEL, MARK ATTENDANCE, RECURRING
+# ============================================================================
+
+@router.post("/sessions/{session_id}/cancel")
+async def cancel_session(
+    session_id: str,
+    reason: str = Body(...),
+    cancelled_by: str = Body("coach")
+):
+    """Cancel a session with reason"""
+    try:
+        conn = await get_db()
+        
+        metadata = json.dumps({
+            "cancellation": {
+                "cancelled_by": cancelled_by,
+                "reason": reason,
+                "cancelled_at": datetime.utcnow().isoformat()
+            }
+        })
+        
+        query = """
+            UPDATE scheduled_sessions
+            SET status = 'cancelled',
+                metadata = $1,
+                updated_at = NOW()
+            WHERE id = $2::uuid
+            RETURNING id::text, status
+        """
+        
+        result = await conn.fetchrow(query, metadata, session_id)
+        await conn.close()
+        
+        if not result:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        return {
+            "success": True,
+            "session": dict(result),
+            "message": f"Session cancelled: {reason}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/sessions/{session_id}/mark-attendance")
+async def mark_attendance(
+    session_id: str,
+    status: str = Body(...),
+    notes: Optional[str] = Body(None)
+):
+    """Mark attendance for a session"""
+    try:
+        conn = await get_db()
+        
+        metadata = json.dumps({
+            "attendance": {
+                "status": status,
+                "notes": notes,
+                "marked_at": datetime.utcnow().isoformat()
+            }
+        })
+        
+        session_status = 'completed' if status == 'attended' else 'cancelled'
+        
+        query = """
+            UPDATE scheduled_sessions
+            SET status = $1,
+                metadata = $2,
+                updated_at = NOW()
+            WHERE id = $3::uuid
+            RETURNING id::text, status
+        """
+        
+        result = await conn.fetchrow(query, session_status, metadata, session_id)
+        await conn.close()
+        
+        if not result:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        return {
+            "success": True,
+            "session": dict(result),
+            "message": f"Attendance marked: {status}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class RecurringSessionCreate(BaseModel):
+    client_id: str
+    recurrence_type: str
+    start_date: str
+    num_sessions: int = 4
+    time: str = "09:00"
+    duration_minutes: int = 60
+    location: str = "online"
+
+@router.post("/sessions/create-recurring")
+async def create_recurring_sessions(data: RecurringSessionCreate):
+    """Create recurring sessions (daily, weekly, biweekly, monthly)"""
+    try:
+        conn = await get_db()
+        org_id = await get_or_create_org()
+        
+        coach = await conn.fetchrow(
+            "SELECT id FROM users WHERE role = 'coach' AND deleted_at IS NULL LIMIT 1"
+        )
+        
+        if not coach:
+            raise HTTPException(status_code=404, detail="No coach found")
+        
+        sessions_created = []
+        start = datetime.fromisoformat(data.start_date)
+        
+        for i in range(data.num_sessions):
+            if data.recurrence_type == 'daily':
+                session_date = start + timedelta(days=i)
+            elif data.recurrence_type == 'weekly':
+                session_date = start + timedelta(weeks=i)
+            elif data.recurrence_type == 'biweekly':
+                session_date = start + timedelta(weeks=i*2)
+            elif data.recurrence_type == 'monthly':
+                session_date = start + timedelta(days=i*30)
+            else:
+                session_date = start + timedelta(days=i)
+            
+            session_datetime = datetime.combine(
+                session_date.date(),
+                datetime.strptime(data.time, "%H:%M").time()
+            )
+            
+            query = """
+                INSERT INTO scheduled_sessions 
+                (org_id, coach_id, client_id, scheduled_at, duration_minutes, 
+                 status, location, metadata)
+                VALUES ($1, $2::uuid, $3::uuid, $4, $5, 'scheduled', $6, $7)
+                RETURNING id::text, scheduled_at::text
+            """
+            
+            metadata = json.dumps({
+                "recurrence_type": data.recurrence_type,
+                "session_number": i + 1,
+                "total_sessions": data.num_sessions
+            })
+            
+            result = await conn.fetchrow(
+                query, org_id, coach['id'], data.client_id,
+                session_datetime, data.duration_minutes,
+                data.location, metadata
+            )
+            
+            sessions_created.append(dict(result))
+        
+        await conn.close()
+        
+        return {
+            "success": True,
+            "sessions_created": len(sessions_created),
+            "sessions": sessions_created,
+            "message": f"Created {len(sessions_created)} {data.recurrence_type} sessions"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
