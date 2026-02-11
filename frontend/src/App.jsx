@@ -1217,6 +1217,7 @@ const Sidebar = ({ activeTab, setActiveTab, isMobileMenuOpen, setIsMobileMenuOpe
     { id: 'dashboard', icon: BarChart3, label: 'Dashboard' },
     { id: 'clients', icon: Users, label: 'Clients' },
     { id: 'sessions', icon: Calendar, label: 'Sessions' },
+    { id: 'manage-sessions', icon: Calendar, label: 'Manage Sessions' },
     { id: 'workouts', icon: Dumbbell, label: 'Workouts' },
     { id: 'coaches', icon: UserPlus, label: 'Coaches' },
     { id: 'payments', icon: DollarSign, label: 'Payments' },
@@ -1574,6 +1575,184 @@ const ReferralsView = () => {
 // MAIN APP
 // ============================================================================
 
+
+// ============================================================================
+// MANAGE SESSIONS VIEW - Simple & Stable
+// ============================================================================
+const ManageSessionsView = () => {
+  const [sessions, setSessions] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [cancelModalOpen, setCancelModalOpen] = useState(false);
+  const [selectedSession, setSelectedSession] = useState(null);
+  const [cancelReason, setCancelReason] = useState('');
+
+  // Load sessions once on mount
+  useEffect(() => {
+    loadSessions();
+  }, []);
+
+  const loadSessions = async () => {
+    setLoading(true);
+    try {
+      const result = await api.getSessions();
+      if (result.success) {
+        setSessions(result.sessions || []);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCancelSession = async () => {
+    if (!cancelReason.trim()) {
+      alert('Please provide a reason');
+      return;
+    }
+
+    try {
+      const result = await api.cancelSession(selectedSession.id, cancelReason, 'coach');
+      if (result.success) {
+        alert('✅ Session cancelled!');
+        setCancelModalOpen(false);
+        setSelectedSession(null);
+        setCancelReason('');
+        loadSessions();
+      }
+    } catch (err) {
+      alert('Failed to cancel session');
+    }
+  };
+
+  const handleMarkAttendance = async (sessionId, status) => {
+    try {
+      const result = await api.markAttendance(sessionId, status);
+      if (result.success) {
+        alert(`✅ Marked as ${status}!`);
+        loadSessions();
+      }
+    } catch (err) {
+      alert('Failed to mark attendance');
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold">📋 Manage Sessions</h2>
+        <button onClick={loadSessions} className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200">
+          🔄 Refresh
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="text-center py-12">
+          <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+        </div>
+      ) : sessions.length === 0 ? (
+        <div className="text-center py-12 bg-white rounded-2xl border">
+          <Calendar size={48} className="mx-auto mb-4 text-slate-400" />
+          <p className="text-slate-600">No sessions found</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {sessions.map(session => {
+            const sessionTime = new Date(session.scheduled_at);
+            const isPast = sessionTime < new Date();
+            const isToday = sessionTime.toDateString() === new Date().toDateString();
+            const canMarkAttendance = (isPast || isToday) && session.status === 'scheduled';
+            const canCancel = session.status === 'scheduled';
+
+            return (
+              <div key={session.id} className="bg-white rounded-2xl border-2 p-4 hover:shadow-lg transition-all">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-3 mb-2">
+                      <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center text-white font-bold">
+                        {session.client_name?.charAt(0) || 'C'}
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-lg">{session.client_name || 'Client'}</h3>
+                        <p className="text-sm text-slate-600">
+                          {sessionTime.toLocaleDateString()} • {sessionTime.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit'})}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-2 ml-4">
+                    <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                      session.status === 'completed' ? 'bg-green-100 text-green-700' :
+                      session.status === 'cancelled' ? 'bg-red-100 text-red-700' :
+                      isToday ? 'bg-green-100 text-green-700' :
+                      'bg-blue-100 text-blue-700'
+                    }`}>
+                      {session.status === 'scheduled' && isToday ? '🟢 TODAY' : session.status.toUpperCase()}
+                    </span>
+
+                    {canMarkAttendance && (
+                      <div className="flex flex-col gap-1">
+                        <button onClick={() => handleMarkAttendance(session.id, 'attended')}
+                          className="px-3 py-1.5 bg-green-500 text-white rounded-lg text-sm font-medium hover:bg-green-600">
+                          ✓ Attended
+                        </button>
+                        <button onClick={() => handleMarkAttendance(session.id, 'absent')}
+                          className="px-3 py-1.5 bg-red-100 text-red-700 rounded-lg text-sm font-medium hover:bg-red-200">
+                          ✗ Absent
+                        </button>
+                      </div>
+                    )}
+
+                    {canCancel && (
+                      <button onClick={() => { setSelectedSession(session); setCancelModalOpen(true); }}
+                        className="px-3 py-1.5 bg-orange-100 text-orange-700 rounded-lg text-sm font-medium hover:bg-orange-200">
+                        ❌ Cancel
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Cancel Modal */}
+      {cancelModalOpen && selectedSession && (
+        <Modal isOpen={cancelModalOpen} onClose={() => { setCancelModalOpen(false); setSelectedSession(null); }} title="Cancel Session" size="md">
+          <div className="space-y-4">
+            <div className="p-4 bg-slate-50 rounded-xl">
+              <div className="font-semibold">{selectedSession.client_name}</div>
+              <div className="text-sm text-slate-600">
+                {new Date(selectedSession.scheduled_at).toLocaleString()}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">Reason for Cancellation *</label>
+              <textarea value={cancelReason} onChange={(e) => setCancelReason(e.target.value)}
+                className="w-full px-4 py-3 rounded-xl border outline-none" rows={3}
+                placeholder="e.g., Client requested reschedule, Coach unavailable..." />
+            </div>
+
+            <div className="flex gap-3">
+              <button onClick={() => { setCancelModalOpen(false); setSelectedSession(null); }}
+                className="flex-1 px-4 py-3 rounded-xl border">
+                Keep Session
+              </button>
+              <button onClick={handleCancelSession}
+                className="flex-1 px-4 py-3 rounded-xl bg-red-500 text-white font-medium hover:bg-red-600">
+                ❌ Cancel Session
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+};
+
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -1602,6 +1781,7 @@ function App() {
       case 'dashboard': return <Dashboard clients={clients} sessions={sessions} stats={stats} />;
       case 'clients': return <ClientsView clients={clients} onRefresh={loadData} />;
       case 'sessions': return <SessionsView sessions={sessions} clients={clients} onRefresh={loadData} />;
+      case 'manage-sessions': return <ManageSessionsView />;
       case 'workouts': return <WorkoutsView />;
       case 'coaches': return <CoachesView />;
       case 'payments': return <PaymentsView clients={clients} />;
