@@ -36,3 +36,4 @@ logs/
 *_broken_backup.py
 *before*.jsx
 .azure-credentials.json
+.azure-storage-key.txt

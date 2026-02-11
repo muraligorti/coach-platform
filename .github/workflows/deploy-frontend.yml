@@ -5,31 +5,40 @@ on:
     branches: [ main ]
     paths:
       - 'frontend/**'
+      - '.github/workflows/deploy-frontend.yml'
   workflow_dispatch:
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '18'
-    - name: Install and Build
+    
+    - name: Install dependencies
       run: |
         cd frontend
         npm ci
-        npm run build
-    - name: Azure Login
-      uses: azure/login@v1
-      with:
-        creds: ${{ secrets.AZURE_CREDENTIALS }}
-    - name: Deploy to Azure Storage
+    
+    - name: Build
       run: |
-        az storage blob upload-batch \
-          --account-name coachfront49992 \
-          --source ./frontend/dist \
-          --destination '$web' \
-          --overwrite \
-          --auth-mode login
+        cd frontend
+        npm run build
+    
+    - name: Deploy to Azure Storage
+      uses: azure/CLI@v1
+      with:
+        azcliversion: 2.30.0
+        inlineScript: |
+          az storage blob upload-batch \
+            --account-name coachfront49992 \
+            --source ./frontend/dist \
+            --destination '$web' \
+            --overwrite \
+            --account-key ${{ secrets.AZURE_STORAGE_KEY }}
