@@ -32,13 +32,16 @@ jobs:
         npm run build
     
     - name: Deploy to Azure Storage
-      uses: azure/CLI@v1
+      uses: azure/CLI@v2
       with:
-        azcliversion: 2.30.0
+        azcliversion: latest
         inlineScript: |
+          az storage blob delete-batch \
+            --account-name coachfront49992 \
+            --source '$web' \
+            --account-key ${{ secrets.AZURE_STORAGE_KEY }}
           az storage blob upload-batch \
             --account-name coachfront49992 \
             --source ./frontend/dist \
             --destination '$web' \
-            --overwrite \
             --account-key ${{ secrets.AZURE_STORAGE_KEY }}
