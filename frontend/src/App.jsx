@@ -6,7 +6,7 @@ import {
   Phone, Mail, Edit, Trash2, Activity, FileText, ArrowLeft
 } from 'lucide-react';
 
-const API_URL = 'https://coach-api-1770519048.azurewebsites.net/api/v1';
+const API_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL) || 'https://coach-api-1770519048.azurewebsites.net/api/v1';
 
 // ============================================================================
 // API SERVICE
@@ -61,9 +61,7 @@ const api = {
     return this.request(url); 
   },
   async createWorkout(data) { 
-    const coaches = await this.request('/coaches');
-    const coachId = coaches.coaches?.[0]?.id || 'default';
-    return this.request(`/workouts/library?coach_id=${coachId}`, { method: 'POST', body: JSON.stringify(data) }); 
+    return this.request('/workouts/library', { method: 'POST', body: JSON.stringify(data) }); 
   },
   async assignWorkout(data) { return this.request('/workouts/assign-to-client', { method: 'POST', body: JSON.stringify(data) }); },
   async cancelSession(sessionId, reason, cancelledBy = 'coach') {
@@ -461,8 +459,8 @@ const ClientDetailModal = ({ isOpen, onClose, client }) => {
               </div>
             </div>
             <div className="text-right">
-              <div className="text-sm opacity-75">Overall Grade</div>
-              <div className="text-4xl font-bold">{client.overall_grade}</div>
+              <div className="text-sm opacity-75">Status</div>
+              <div className="text-2xl font-bold">Active</div>
             </div>
           </div>
         </div>
@@ -498,9 +496,9 @@ const ClientDetailModal = ({ isOpen, onClose, client }) => {
           <div className="bg-orange-50 rounded-xl p-4 border border-orange-200">
             <div className="flex items-center justify-between mb-2">
               <TrendingUp size={20} className="text-orange-600" />
-              <span className="text-2xl font-bold text-orange-900">{client.progress}%</span>
+              <span className="text-2xl font-bold text-orange-900">{completedSessions}</span>
             </div>
-            <div className="text-sm text-orange-700 font-medium">Progress</div>
+            <div className="text-sm text-orange-700 font-medium">Completed</div>
           </div>
         </div>
 
@@ -1075,9 +1073,28 @@ const ScheduleSessionModal = ({ isOpen, onClose, onSuccess, clients }) => {
     e.preventDefault();
     setLoading(true);
     try {
-      await api.createSession(formData);
-      onSuccess();
-      onClose();
+      let result;
+      if (formData.recurrence_type !== 'once') {
+        const [date, time] = formData.scheduled_at.split('T');
+        result = await api.createRecurringSessions({
+          client_id: formData.client_id,
+          recurrence_type: formData.recurrence_type,
+          start_date: date,
+          time: time || '09:00',
+          num_sessions: formData.num_sessions,
+          duration_minutes: formData.duration_minutes,
+          location: formData.location_type
+        });
+      } else {
+        result = await api.createSession(formData);
+      }
+      if (result.success) {
+        alert(result.message || 'Session(s) created!');
+        onSuccess();
+        onClose();
+      }
+    } catch (err) {
+      alert('Failed to create session: ' + err.message);
     } finally {
       setLoading(false);
     }
@@ -1152,28 +1169,16 @@ const handleSubmit = async (e) => {
   e.preventDefault();
   setLoading(true);
   try {
-    let result;
-    
-    if (formData.recurrence_type !== 'once') {
-      const [date, time] = formData.scheduled_at.split('T');
-      result = await api.createRecurringSessions({
-        client_id: formData.client_id,
-        recurrence_type: formData.recurrence_type,
-        start_date: date,
-        time: time || '09:00',
-        num_sessions: formData.num_sessions,
-        duration_minutes: formData.duration_minutes,
-        location: formData.location_type
-      });
-    } else {
-      result = await api.createSession(formData);
-    }
-    
+    const result = await api.createPaymentLink({
+      client_id: formData.client_id,
+      amount: formData.amount,
+      plan_id: formData.plan_id
+    });
     if (result.success) {
-      alert(result.message || 'Session(s) created!');
-      onSuccess();
-      onClose();
+      setPaymentLink(result.payment_link);
     }
+  } catch (err) {
+    alert('Failed to create payment link: ' + err.message);
   } finally {
     setLoading(false);
   }
@@ -1325,10 +1330,10 @@ const ClientsView = ({ clients, onRefresh }) => {
         {clients.map(c => (
           <div key={c.id} className="bg-white rounded-2xl border p-6 hover:shadow-xl transition-all group">
             <div className="flex items-center gap-3 mb-4">
-              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center text-white text-xl font-bold">{c.name.charAt(0)}</div>
+              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center text-white text-xl font-bold">{(c.name || '?').charAt(0)}</div>
               <div className="flex-1">
                 <h3 className="font-bold">{c.name}</h3>
-                <p className="text-sm text-slate-500">{c.sessions} sessions</p>
+                <p className="text-sm text-slate-500">{c.email || c.phone || 'No contact'}</p>
               </div>
               <button onClick={() => setSelectedClient(c)}
                 className="opacity-0 group-hover:opacity-100 transition-opacity p-2 hover:bg-slate-100 rounded-lg"
@@ -1337,14 +1342,9 @@ const ClientsView = ({ clients, onRefresh }) => {
               </button>
             </div>
 
-            <div className="mb-4">
-              <div className="flex justify-between mb-2"><span className="text-sm font-medium">Progress</span><span className="text-sm font-bold">{c.progress}%</span></div>
-              <div className="w-full bg-slate-200 rounded-full h-2.5"><div className="h-full bg-gradient-to-r from-orange-500 to-red-500 rounded-full" style={{width: `${c.progress}%`}} /></div>
-            </div>
-
-            <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
-              <span className="text-sm font-medium text-slate-600">Grade</span>
-              <span className="text-lg font-bold text-orange-600">{c.overall_grade}</span>
+            <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl text-sm">
+              <span className="text-slate-600">Member since</span>
+              <span className="font-medium">{c.created_at ? new Date(c.created_at).toLocaleDateString() : 'N/A'}</span>
             </div>
           </div>
         ))}
@@ -1502,17 +1502,22 @@ const CoachesView = () => {
           {coaches.map(c => (
             <div key={c.id} className="bg-white rounded-2xl border p-6 hover:shadow-xl transition-all">
               <div className="flex items-center gap-3 mb-4">
-                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white text-2xl font-bold">{c.full_name.charAt(0)}</div>
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white text-2xl font-bold">{(c.full_name || c.name || '?').charAt(0)}</div>
                 <div>
-                  <h3 className="font-bold text-lg">{c.full_name}</h3>
-                  <p className="text-sm text-slate-500">{c.email}</p>
+                  <h3 className="font-bold text-lg">{c.full_name || c.name}</h3>
+                  <p className="text-sm text-slate-500">{c.email || ''}</p>
                 </div>
               </div>
               <div className="space-y-2 text-sm">
                 <div className="flex items-center justify-between p-2 bg-purple-50 rounded-lg">
                   <span className="text-slate-600">Specialization</span>
                   <span className="font-medium text-purple-700 capitalize">
-                    {typeof c.metadata === 'string' ? JSON.parse(c.metadata).specialization : c.metadata?.specialization || 'General'}
+                    {(() => {
+                      try {
+                        const m = typeof c.metadata === 'string' ? JSON.parse(c.metadata) : c.metadata;
+                        return m?.specialization || 'General';
+                      } catch { return 'General'; }
+                    })()}
                   </span>
                 </div>
                 <div className="flex items-center justify-between p-2 bg-slate-50 rounded-lg">

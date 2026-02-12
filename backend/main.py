@@ -39,11 +39,11 @@ async def health():
     try:
         conn = await asyncpg.connect(
             host=os.getenv("DB_HOST", "coach-db-1770519048.postgres.database.azure.com"),
-            port=5432,
+            port=int(os.getenv("DB_PORT", 5432)),
             user=os.getenv("DB_USER", "dbadmin"),
             password=os.getenv("DB_PASSWORD", "CoachPlatform2026!SecureDB"),
             database=os.getenv("DB_NAME", "coach_platform"),
-            ssl='require'
+            ssl="require" if os.getenv("DB_SSL", "true").lower() == "true" else None,
         )
         await conn.execute('SELECT 1')
         await conn.close()
@@ -51,5 +51,6 @@ async def health():
     except Exception as e:
         return {"success": False, "status": "degraded", "checks": {"api": "operational", "database": f"error: {str(e)}"}}
 
+# Import the router from complete_api (which has NO prefix — we add it here)
 from complete_api import router
 app.include_router(router, prefix="/api/v1", tags=["API"])
