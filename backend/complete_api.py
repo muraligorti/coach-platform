@@ -308,7 +308,7 @@ async def update_session_status(session_id: str, request: dict = Body(...)):
     try:
         status = request.get("status", "completed")
         row = await conn.fetchrow(
-            """UPDATE scheduled_sessions SET status = $1, updated_at = NOW()
+            """UPDATE scheduled_sessions SET status = $1::varchar, updated_at = NOW()
                WHERE id = $2::uuid RETURNING id::text, status""",
             status, session_id,
         )
@@ -356,7 +356,7 @@ async def mark_attendance(session_id: str, data: dict = Body(...)):
 
         row = await conn.fetchrow(
             """UPDATE scheduled_sessions
-               SET status = $1, completed_at = CASE WHEN $1 = 'completed' THEN NOW() ELSE NULL END, updated_at = NOW()
+               SET status = $1::varchar, completed_at = CASE WHEN $1::varchar = 'completed' THEN NOW() ELSE NULL END, updated_at = NOW()
                WHERE id = $2::uuid RETURNING id::text, status""",
             new_status, session_id,
         )
