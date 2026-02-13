@@ -794,3 +794,313 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+# ============================================================================
+# BULK IMPORT ENDPOINTS
+# ============================================================================
+@router.post("/clients/bulk-import")
+async def bulk_import_clients(data: dict = Body(...)):
+    """Import multiple clients from parsed XLSX/CSV data."""
+    conn = await get_db()
+    try:
+        org_id = await ensure_org(conn)
+        clients_data = data.get("clients", [])
+        created = 0
+        errors = []
+
+        for i, c in enumerate(clients_data):
+            try:
+                name = c.get("name", "").strip()
+                if not name:
+                    errors.append(f"Row {i+1}: Name is required")
+                    continue
+                email = c.get("email", "").strip() or ""
+                phone = c.get("phone", "").strip() or ""
+
+                metadata = {}
+                for key in ["age", "gender", "weight", "height", "goal", "notes"]:
+                    if c.get(key):
+                        metadata[key] = c[key]
+
+                await conn.execute(
+                    """INSERT INTO users (primary_org_id, full_name, email, phone, role, is_active, is_verified, metadata, created_at)
+                       VALUES ($1, $2, $3, $4, 'client', true, true, $5::jsonb, NOW())""",
+                    org_id, name, email, phone, json.dumps(metadata),
+                )
+                created += 1
+            except asyncpg.UniqueViolationError:
+                errors.append(f"Row {i+1}: {name} - duplicate email or phone")
+            except Exception as e:
+                errors.append(f"Row {i+1}: {str(e)}")
+
+        return {
+            "success": True,
+            "created": created,
+            "errors": errors,
+            "message": f"{created} clients imported" + (f", {len(errors)} errors" if errors else ""),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await conn.close()
+
+
+@router.post("/workouts/bulk-import")
+async def bulk_import_workouts(data: dict = Body(...)):
+    """Import multiple workouts from parsed XLSX/CSV data."""
+    conn = await get_db()
+    try:
+        org_id = await ensure_org(conn)
+        coach_id = await ensure_coach(conn, org_id)
+        workouts_data = data.get("workouts", [])
+        created = 0
+        errors = []
+
+        for i, w in enumerate(workouts_data):
+            try:
+                name = w.get("name", "").strip()
+                if not name:
+                    errors.append(f"Row {i+1}: Name is required")
+                    continue
+
+                structure = {}
+                for key in ["sets", "reps", "rest", "equipment", "difficulty", "instructions", "muscle_group"]:
+                    if w.get(key):
+                        structure[key] = w[key]
+
+                await conn.execute(
+                    """INSERT INTO session_templates
+                       (org_id, created_by, name, description, session_type, duration_minutes, structure, is_active, created_at)
+                       VALUES ($1, $2::uuid, $3, $4, $5, $6, $7::jsonb, true, NOW())""",
+                    org_id, coach_id, name,
+                    w.get("description", ""),
+                    w.get("category", "strength"),
+                    int(w.get("duration_minutes", 60) or 60),
+                    json.dumps(structure),
+                )
+                created += 1
+            except Exception as e:
+                errors.append(f"Row {i+1}: {str(e)}")
+
+        return {
+            "success": True,
+            "created": created,
+            "errors": errors,
+            "message": f"{created} workouts imported" + (f", {len(errors)} errors" if errors else ""),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await conn.close()
+
+
+# ============================================================================
+# SCHEDULE — Bulk session planning
+# ============================================================================
+@router.post("/schedule/bulk-plan")
+async def bulk_plan_sessions(data: dict = Body(...)):
+    """Plan multiple sessions at once: [{client_id, scheduled_at, workout_id?, duration_minutes?}]"""
+    conn = await get_db()
+    try:
+        org_id = await ensure_org(conn)
+        coach_id = await ensure_coach(conn, org_id)
+        sessions_data = data.get("sessions", [])
+        created = 0
+
+        for s in sessions_data:
+            workout_id = s.get("workout_id")
+            await conn.execute(
+                """INSERT INTO scheduled_sessions
+                   (org_id, coach_id, client_id, session_template_id, scheduled_at, duration_minutes, status, location, created_at)
+                   VALUES ($1, $2::uuid, $3::uuid, $4, $5::timestamp, $6, 'scheduled', $7, NOW())""",
+                org_id, coach_id, s["client_id"],
+                uuid.UUID(workout_id) if workout_id else None,
+                s["scheduled_at"],
+                int(s.get("duration_minutes", 60)),
+                s.get("location", "offline"),
+            )
+            created += 1
+
+        return {"success": True, "created": created, "message": f"{created} sessions planned"}
+    except Exception as e:
+        print(f"Bulk plan error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await conn.close()
+
+
+@router.get("/schedule/today")
+async def get_today_schedule():
+    """Get all sessions for today."""
+    conn = await get_db()
+    try:
+        rows = await conn.fetch(
+            """SELECT ss.id::text, ss.scheduled_at::text, ss.status, ss.duration_minutes,
+                      ss.location, ss.notes, ss.metadata, ss.session_template_id::text as workout_id,
+                      u.full_name as client_name, u.id::text as client_id, u.phone as client_phone,
+                      u.email as client_email, u.metadata as client_metadata,
+                      st.name as workout_name, st.description as workout_description, st.structure as workout_structure
+               FROM scheduled_sessions ss
+               JOIN users u ON ss.client_id = u.id
+               LEFT JOIN session_templates st ON ss.session_template_id = st.id
+               WHERE DATE(ss.scheduled_at) = CURRENT_DATE
+               ORDER BY ss.scheduled_at ASC"""
+        )
+        return {"success": True, "sessions": [dict(r) for r in rows]}
+    except Exception as e:
+        print(f"Today schedule error: {e}")
+        return {"success": True, "sessions": []}
+    finally:
+        await conn.close()
+
+
+@router.get("/schedule/week")
+async def get_week_schedule():
+    """Get all sessions for the current week."""
+    conn = await get_db()
+    try:
+        rows = await conn.fetch(
+            """SELECT ss.id::text, ss.scheduled_at::text, ss.status, ss.duration_minutes,
+                      ss.location, ss.notes,
+                      u.full_name as client_name, u.id::text as client_id,
+                      st.name as workout_name
+               FROM scheduled_sessions ss
+               JOIN users u ON ss.client_id = u.id
+               LEFT JOIN session_templates st ON ss.session_template_id = st.id
+               WHERE ss.scheduled_at >= DATE_TRUNC('week', CURRENT_DATE)
+               AND ss.scheduled_at < DATE_TRUNC('week', CURRENT_DATE) + INTERVAL '7 days'
+               ORDER BY ss.scheduled_at ASC"""
+        )
+        return {"success": True, "sessions": [dict(r) for r in rows]}
+    except Exception as e:
+        return {"success": True, "sessions": []}
+    finally:
+        await conn.close()
+
+
+# ============================================================================
+# SESSION FLOW — Start, track exercises, complete
+# ============================================================================
+@router.post("/sessions/{session_id}/start")
+async def start_session(session_id: str):
+    conn = await get_db()
+    try:
+        row = await conn.fetchrow(
+            """UPDATE scheduled_sessions
+               SET status = 'in_progress'::varchar, updated_at = NOW()
+               WHERE id = $1::uuid RETURNING id::text, status, client_id::text, session_template_id::text""",
+            session_id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        # Fetch workout details if assigned
+        workout = None
+        if row["session_template_id"]:
+            workout = await conn.fetchrow(
+                "SELECT name, description, structure FROM session_templates WHERE id = $1::uuid",
+                row["session_template_id"],
+            )
+
+        return {
+            "success": True,
+            "session": dict(row),
+            "workout": dict(workout) if workout else None,
+            "message": "Session started",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await conn.close()
+
+
+@router.post("/sessions/{session_id}/complete")
+async def complete_session(session_id: str, data: dict = Body(...)):
+    conn = await get_db()
+    try:
+        notes = data.get("notes", "")
+        exercises_completed = data.get("exercises_completed", [])
+        metadata = {"exercises_completed": exercises_completed}
+
+        row = await conn.fetchrow(
+            """UPDATE scheduled_sessions
+               SET status = 'completed'::varchar, completed_at = NOW(), notes = $1,
+                   metadata = metadata || $2::jsonb, updated_at = NOW()
+               WHERE id = $3::uuid RETURNING id::text, status""",
+            notes, json.dumps(metadata), session_id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Session not found")
+        return {"success": True, "session": dict(row), "message": "Session completed"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await conn.close()
+
+
+# ============================================================================
+# PROGRESS PHOTOS & DATA
+# ============================================================================
+@router.post("/progress/upload")
+async def upload_progress(data: dict = Body(...)):
+    """Store progress data (photos as base64 or URLs, measurements, notes)."""
+    conn = await get_db()
+    try:
+        org_id = await ensure_org(conn)
+        client_id = data["client_id"]
+        entry_type = data.get("type", "measurement")
+        payload = {
+            "photos": data.get("photos", []),
+            "weight": data.get("weight"),
+            "measurements": data.get("measurements", {}),
+            "notes": data.get("notes", ""),
+        }
+
+        row = await conn.fetchrow(
+            """INSERT INTO progress_entries (org_id, client_id, entry_type, payload, created_at)
+               VALUES ($1, $2::uuid, $3, $4::jsonb, NOW())
+               RETURNING id::text, entry_type, created_at::text""",
+            org_id, client_id, entry_type, json.dumps(payload),
+        )
+        return {"success": True, "entry": dict(row), "message": "Progress recorded"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await conn.close()
+
+
+@router.post("/clients/{client_id}/assign-workout")
+async def assign_workout_to_client(client_id: str, data: dict = Body(...)):
+    """Assign a workout plan to a client (stores in user metadata)."""
+    conn = await get_db()
+    try:
+        workout_id = data["workout_id"]
+        await conn.execute(
+            """UPDATE users SET metadata = metadata || jsonb_build_object('assigned_workout_id', $1::text), updated_at = NOW()
+               WHERE id = $2::uuid""",
+            workout_id, client_id,
+        )
+        return {"success": True, "message": "Workout assigned to client"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await conn.close()
+
+
+@router.post("/reminders/send")
+async def send_reminders(data: dict = Body(...)):
+    """Placeholder for sending session reminders via SMS/Email."""
+    session_ids = data.get("session_ids", [])
+    method = data.get("method", "sms")
+    # In production: integrate with Twilio (SMS) or SendGrid (Email)
+    return {
+        "success": True,
+        "sent": len(session_ids),
+        "method": method,
+        "message": f"Reminders queued for {len(session_ids)} sessions via {method} (demo mode)",
+    }

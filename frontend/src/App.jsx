@@ -1,110 +1,64 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  Calendar, Users, TrendingUp, Award, Share2, BarChart3, Bell, Menu, X, 
-  Plus, Clock, CheckCircle, Star, Send, LogOut, Video, MapPin, DollarSign, 
-  CreditCard, Gift, BookOpen, UserPlus, Dumbbell, Filter, Search, Eye,
-  Phone, Mail, Edit, Trash2, Activity, FileText, ArrowLeft
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  Calendar, Users, TrendingUp, BarChart3, Bell, Menu, X,
+  Plus, Clock, CheckCircle, Play, Search, Eye, Phone, Mail,
+  Upload, Camera, ArrowLeft, Check, AlertCircle, Zap, Dumbbell
 } from 'lucide-react';
 
 const API_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL) || 'https://coach-api-1770519048.azurewebsites.net/api/v1';
 
-// ============================================================================
-// API SERVICE
-// ============================================================================
 const api = {
-  async request(endpoint, options = {}) {
+  async request(ep, opts = {}) {
     try {
-      const res = await fetch(`${API_URL}${endpoint}`, {
-        headers: { 'Content-Type': 'application/json' },
-        ...options
-      });
-      const data = await res.json();
-      return data;
-    } catch (err) {
-      console.error('API Error:', err);
-      throw err;
-    }
+      const r = await fetch(`${API_URL}${ep}`, { headers: { 'Content-Type': 'application/json' }, ...opts });
+      const d = await r.json();
+      if (!r.ok && !d.success) throw new Error(d.detail || d.message || 'Request failed');
+      return d;
+    } catch (e) { console.error('API:', e); throw e; }
   },
-  
-  // Clients
-  async getClients() { return this.request('/clients'); },
-  async getClient(id) { return this.request(`/clients/${id}`); },
-  async createClient(data) { return this.request('/clients', { method: 'POST', body: JSON.stringify(data) }); },
-  async createClientEnhanced(data) { return this.request('/clients/enhanced', { method: 'POST', body: JSON.stringify(data) }); },
-  
-  // Sessions
-  async getSessions(params = {}) { 
-    const query = new URLSearchParams(params).toString();
-    return this.request(`/sessions${query ? '?' + query : ''}`); 
-  },
-  async createSession(data) { return this.request('/sessions', { method: 'POST', body: JSON.stringify(data) }); },
-  
-  // Stats & Payments
-  async getDashboardStats() { return this.request('/dashboard/stats'); },
-  async createPaymentLink(data) { return this.request('/payments/create-link', { method: 'POST', body: JSON.stringify(data) }); },
-  async getClientPayments(clientId) { return this.request(`/payments/client/${clientId}`); },
-  
-  // Progress & Grades
-  async getClientProgress(clientId) { return this.request(`/progress/client/${clientId}`); },
-  async getClientGrades(clientId) { return this.request(`/grading/client/${clientId}`); },
-  async getClientConsistency(clientId, days = 30) { return this.request(`/progress/consistency/${clientId}?days=${days}`); },
-  async sendProgressReminder(clientId) { return this.request(`/progress/reminder/${clientId}`, { method: 'POST' }); },
-  
-  // Referrals & Coaches
-  async getReferrals() { return this.request('/referrals'); },
-  async getCoaches() { return this.request('/coaches'); },
-  async registerCoach(data) { return this.request('/coaches/register', { method: 'POST', body: JSON.stringify(data) }); },
-  
-  // Workouts & Nutrition
-  async getWorkouts(category) { 
-    const url = category ? `/workouts/library?category=${category}` : '/workouts/library';
-    return this.request(url); 
-  },
-  async createWorkout(data) { 
-    return this.request('/workouts/library', { method: 'POST', body: JSON.stringify(data) }); 
-  },
-  async assignWorkout(data) { return this.request('/workouts/assign-to-client', { method: 'POST', body: JSON.stringify(data) }); },
-  async cancelSession(sessionId, reason, cancelledBy = 'coach') {
-    return this.request(`/sessions/${sessionId}/cancel`, {
-      method: 'POST',
-      body: JSON.stringify({ reason, cancelled_by: cancelledBy })
-    });
-  },
-  async markAttendance(sessionId, status, notes = null) {
-    return this.request(`/sessions/${sessionId}/mark-attendance`, {
-      method: 'POST',
-      body: JSON.stringify({ status, notes })
-    });
-  },
-  async createRecurringSessions(data) {
-    return this.request('/sessions/create-recurring', {
-      method: 'POST',
-      body: JSON.stringify(data)
-    });
-  },
-  async getNutritionPlans() { return this.request('/nutrition/plans'); },
-  async createNutritionPlan(data) { return this.request('/nutrition/plans', { method: 'POST', body: JSON.stringify(data) }); },
-  async assignNutrition(planId, clientId, startDate, coachId) {
-    return this.request('/nutrition/assign', {
-      method: 'POST',
-      body: JSON.stringify({ plan_id: planId, client_id: clientId, start_date: startDate, coach_id: coachId })
-    });
-  },
+  getClients() { return this.request('/clients'); },
+  createClient(d) { return this.request('/clients', { method: 'POST', body: JSON.stringify(d) }); },
+  bulkImportClients(d) { return this.request('/clients/bulk-import', { method: 'POST', body: JSON.stringify(d) }); },
+  getWorkouts(c) { return this.request(c ? `/workouts/library?category=${c}` : '/workouts/library'); },
+  createWorkout(d) { return this.request('/workouts/library', { method: 'POST', body: JSON.stringify(d) }); },
+  bulkImportWorkouts(d) { return this.request('/workouts/bulk-import', { method: 'POST', body: JSON.stringify(d) }); },
+  getSessions(p) { const q = p ? '?' + new URLSearchParams(p).toString() : ''; return this.request(`/sessions${q}`); },
+  getTodaySchedule() { return this.request('/schedule/today'); },
+  bulkPlanSessions(d) { return this.request('/schedule/bulk-plan', { method: 'POST', body: JSON.stringify(d) }); },
+  createSession(d) { return this.request('/sessions', { method: 'POST', body: JSON.stringify(d) }); },
+  createRecurringSessions(d) { return this.request('/sessions/create-recurring', { method: 'POST', body: JSON.stringify(d) }); },
+  startSession(id) { return this.request(`/sessions/${id}/start`, { method: 'POST' }); },
+  completeSession(id, d) { return this.request(`/sessions/${id}/complete`, { method: 'POST', body: JSON.stringify(d) }); },
+  markAttendance(id, s) { return this.request(`/sessions/${id}/mark-attendance`, { method: 'POST', body: JSON.stringify({ status: s }) }); },
+  cancelSession(id, r) { return this.request(`/sessions/${id}/cancel`, { method: 'POST', body: JSON.stringify({ reason: r, cancelled_by: 'coach' }) }); },
+  sendReminders(ids, m) { return this.request('/reminders/send', { method: 'POST', body: JSON.stringify({ session_ids: ids, method: m }) }); },
+  getDashboardStats() { return this.request('/dashboard/stats'); },
+  getClientConsistency(id) { return this.request(`/progress/consistency/${id}`); },
+  uploadProgress(d) { return this.request('/progress/upload', { method: 'POST', body: JSON.stringify(d) }); },
 };
 
-// ============================================================================
-// MODAL COMPONENT
-// ============================================================================
+function parseCSV(text) {
+  const lines = text.trim().split('\n');
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_'));
+  return lines.slice(1).map(line => {
+    const vals = line.split(',').map(v => v.trim().replace(/^"|"$/g, ''));
+    const obj = {};
+    headers.forEach((h, i) => { obj[h] = vals[i] || ''; });
+    return obj;
+  });
+}
+
 const Modal = ({ isOpen, onClose, title, children, size = 'md' }) => {
   if (!isOpen) return null;
-  const sizeClasses = { sm: 'max-w-md', md: 'max-w-2xl', lg: 'max-w-4xl', xl: 'max-w-6xl' };
+  const s = { sm: 'max-w-md', md: 'max-w-2xl', lg: 'max-w-4xl' };
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className={`relative bg-white rounded-2xl shadow-2xl ${sizeClasses[size]} w-full max-h-[90vh] overflow-y-auto`}>
-        <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between z-10">
-          <h2 className="text-2xl font-bold">{title}</h2>
-          <button onClick={onClose} className="hover:bg-slate-100 p-2 rounded-lg transition-colors"><X size={24} /></button>
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+      <div className={`relative bg-white rounded-2xl shadow-2xl ${s[size]} w-full max-h-[90vh] overflow-y-auto`}>
+        <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between z-10 rounded-t-2xl">
+          <h2 className="text-xl font-bold">{title}</h2>
+          <button onClick={onClose} className="hover:bg-slate-100 p-2 rounded-lg"><X size={20} /></button>
         </div>
         <div className="p-6">{children}</div>
       </div>
@@ -112,1696 +66,479 @@ const Modal = ({ isOpen, onClose, title, children, size = 'md' }) => {
   );
 };
 
-// ============================================================================
-// ENHANCED ADD CLIENT MODAL (4 STEPS)
-// ============================================================================
-const AddClientEnhancedModal = ({ isOpen, onClose, onSuccess }) => {
-  const [currentStep, setCurrentStep] = useState(1);
-  const [formData, setFormData] = useState({
-    name: '', email: '', phone: '',
-    current_weight: '', target_weight: '', height: '', age: '', gender: '',
-    target_body_type: '', fitness_goal: '',
-    current_diet: '', dietary_restrictions: [], target_calories: '',
-    medical_conditions: [], injuries: [], activity_level: 'moderate', sleep_hours: 7,
-    progress_check_frequency: 'monthly'
-  });
-  const [loading, setLoading] = useState(false);
-  const [restrictionInput, setRestrictionInput] = useState('');
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    try {
-      const result = await api.createClientEnhanced(formData);
-      if (result.success) {
-        alert('✅ Client created with full profile!');
-        onSuccess();
-        onClose();
-        setCurrentStep(1);
-        setFormData({
-          name: '', email: '', phone: '',
-          current_weight: '', target_weight: '', height: '', age: '', gender: '',
-          target_body_type: '', fitness_goal: '',
-          current_diet: '', dietary_restrictions: [], target_calories: '',
-          medical_conditions: [], injuries: [], activity_level: 'moderate', sleep_hours: 7,
-          progress_check_frequency: 'monthly'
-        });
-      }
-    } catch (err) {
-      alert('Failed: ' + err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const addRestriction = () => {
-    if (restrictionInput.trim()) {
-      setFormData({...formData, dietary_restrictions: [...formData.dietary_restrictions, restrictionInput.trim()]});
-      setRestrictionInput('');
-    }
-  };
-
+const Toast = ({ message, type = 'success', onClose }) => {
+  useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, []);
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Add New Client - Detailed Profile" size="lg">
-      <form onSubmit={handleSubmit}>
-        {/* Step Indicator */}
-        <div className="flex items-center justify-between mb-6">
-          {[1, 2, 3, 4].map(step => (
-            <div key={step} className="flex-1 mx-1">
-              <div className={`h-2 rounded-full transition-all ${currentStep >= step ? 'bg-orange-500' : 'bg-slate-200'}`} />
-              <div className="text-xs mt-1 text-center font-medium">
-                {step === 1 && 'Basic Info'}
-                {step === 2 && 'Physical'}
-                {step === 3 && 'Goals & Diet'}
-                {step === 4 && 'Medical'}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Step 1: Basic Info */}
-        {currentStep === 1 && (
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium mb-2">Full Name *</label>
-              <input type="text" required value={formData.name}
-                onChange={(e) => setFormData({...formData, name: e.target.value})}
-                className="w-full px-4 py-3 rounded-xl border focus:border-orange-500 focus:ring-2 focus:ring-orange-200 outline-none" />
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium mb-2">Email</label>
-                <input type="email" value={formData.email}
-                  onChange={(e) => setFormData({...formData, email: e.target.value})}
-                  className="w-full px-4 py-3 rounded-xl border focus:border-orange-500 outline-none" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-2">Phone</label>
-                <input type="tel" value={formData.phone}
-                  onChange={(e) => setFormData({...formData, phone: e.target.value})}
-                  className="w-full px-4 py-3 rounded-xl border focus:border-orange-500 outline-none"
-                  placeholder="+91 98765 43210" />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Step 2: Physical Details */}
-        {currentStep === 2 && (
-          <div className="space-y-4">
-            <div className="grid grid-cols-3 gap-4">
-              <div>
-                <label className="block text-sm font-medium mb-2">Current Weight (kg)</label>
-                <input type="number" step="0.1" value={formData.current_weight}
-                  onChange={(e) => setFormData({...formData, current_weight: parseFloat(e.target.value) || ''})}
-                  className="w-full px-4 py-3 rounded-xl border focus:border-orange-500 outline-none" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-2">Target Weight (kg)</label>
-                <input type="number" step="0.1" value={formData.target_weight}
-                  onChange={(e) => setFormData({...formData, target_weight: parseFloat(e.target.value) || ''})}
-                  className="w-full px-4 py-3 rounded-xl border focus:border-orange-500 outline-none" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-2">Height (cm)</label>
-                <input type="number" value={formData.height}
-                  onChange={(e) => setFormData({...formData, height: parseFloat(e.target.value) || ''})}
-                  className="w-full px-4 py-3 rounded-xl border focus:border-orange-500 outline-none" />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium mb-2">Age</label>
-                <input type="number" value={formData.age}
-                  onChange={(e) => setFormData({...formData, age: parseInt(e.target.value) || ''})}
-                  className="w-full px-4 py-3 rounded-xl border focus:border-orange-500 outline-none" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-2">Gender</label>
-                <select value={formData.gender}
-                  onChange={(e) => setFormData({...formData, gender: e.target.value})}
-                  className="w-full px-4 py-3 rounded-xl border focus:border-orange-500 outline-none">
-                  <option value="">Select...</option>
-                  <option value="male">Male</option>
-                  <option value="female">Female</option>
-                  <option value="other">Other</option>
-                </select>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Step 3: Goals & Diet */}
-        {currentStep === 3 && (
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium mb-2">Target Body Type</label>
-                <select value={formData.target_body_type}
-                  onChange={(e) => setFormData({...formData, target_body_type: e.target.value})}
-                  className="w-full px-4 py-3 rounded-xl border focus:border-orange-500 outline-none">
-                  <option value="">Select...</option>
-                  <option value="lean">Lean</option>
-                  <option value="muscular">Muscular</option>
-                  <option value="athletic">Athletic</option>
-                  <option value="weight_loss">Weight Loss</option>
-                  <option value="toned">Toned</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-2">Fitness Goal</label>
-                <select value={formData.fitness_goal}
-                  onChange={(e) => setFormData({...formData, fitness_goal: e.target.value})}
-                  className="w-full px-4 py-3 rounded-xl border focus:border-orange-500 outline-none">
-                  <option value="">Select...</option>
-                  <option value="strength">Build Strength</option>
-                  <option value="endurance">Improve Endurance</option>
-                  <option value="flexibility">Increase Flexibility</option>
-                  <option value="weight_loss">Lose Weight</option>
-                  <option value="muscle_gain">Gain Muscle</option>
-                </select>
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-2">Current Diet</label>
-              <textarea value={formData.current_diet}
-                onChange={(e) => setFormData({...formData, current_diet: e.target.value})}
-                className="w-full px-4 py-3 rounded-xl border focus:border-orange-500 outline-none" rows={2}
-                placeholder="Describe current eating habits..." />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-2">Dietary Restrictions</label>
-              <div className="flex gap-2 mb-2">
-                <input type="text" value={restrictionInput}
-                  onChange={(e) => setRestrictionInput(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addRestriction())}
-                  className="flex-1 px-4 py-3 rounded-xl border focus:border-orange-500 outline-none"
-                  placeholder="e.g., Gluten-free, Vegan" />
-                <button type="button" onClick={addRestriction}
-                  className="px-6 py-3 rounded-xl bg-orange-100 text-orange-700 hover:bg-orange-200">Add</button>
-              </div>
-              {formData.dietary_restrictions.length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                  {formData.dietary_restrictions.map((r, i) => (
-                    <span key={i} className="px-3 py-1 bg-orange-100 text-orange-700 rounded-full text-sm flex items-center gap-2">
-                      {r}
-                      <button type="button" onClick={() => setFormData({...formData, dietary_restrictions: formData.dietary_restrictions.filter((_, idx) => idx !== i)})}
-                        className="font-bold hover:text-orange-900">×</button>
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-2">Target Calories/Day</label>
-              <input type="number" value={formData.target_calories}
-                onChange={(e) => setFormData({...formData, target_calories: parseInt(e.target.value) || ''})}
-                className="w-full px-4 py-3 rounded-xl border focus:border-orange-500 outline-none"
-                placeholder="e.g., 2000" />
-            </div>
-          </div>
-        )}
-
-        {/* Step 4: Medical & Lifestyle */}
-        {currentStep === 4 && (
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium mb-2">Activity Level</label>
-              <select value={formData.activity_level}
-                onChange={(e) => setFormData({...formData, activity_level: e.target.value})}
-                className="w-full px-4 py-3 rounded-xl border focus:border-orange-500 outline-none">
-                <option value="sedentary">Sedentary (little/no exercise)</option>
-                <option value="light">Light (1-3 days/week)</option>
-                <option value="moderate">Moderate (3-5 days/week)</option>
-                <option value="active">Active (6-7 days/week)</option>
-                <option value="very_active">Very Active (2x per day)</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-2">Average Sleep Hours</label>
-              <input type="number" min="0" max="24" value={formData.sleep_hours}
-                onChange={(e) => setFormData({...formData, sleep_hours: parseInt(e.target.value) || 7})}
-                className="w-full px-4 py-3 rounded-xl border focus:border-orange-500 outline-none" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-2">Progress Check Frequency</label>
-              <select value={formData.progress_check_frequency}
-                onChange={(e) => setFormData({...formData, progress_check_frequency: e.target.value})}
-                className="w-full px-4 py-3 rounded-xl border focus:border-orange-500 outline-none">
-                <option value="weekly">Weekly</option>
-                <option value="biweekly">Bi-weekly (2 weeks)</option>
-                <option value="monthly">Monthly</option>
-              </select>
-            </div>
-          </div>
-        )}
-
-        {/* Navigation Buttons */}
-        <div className="flex gap-3 mt-6">
-          {currentStep > 1 && (
-            <button type="button" onClick={() => setCurrentStep(currentStep - 1)}
-              className="flex-1 px-4 py-3 rounded-xl border border-slate-300 text-slate-700 font-medium hover:bg-slate-50">
-              ← Back
-            </button>
-          )}
-          {currentStep < 4 ? (
-            <button type="button" onClick={() => setCurrentStep(currentStep + 1)}
-              className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-orange-500 to-red-500 text-white font-medium hover:shadow-lg">
-              Next →
-            </button>
-          ) : (
-            <button type="submit" disabled={loading}
-              className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-green-500 to-emerald-500 text-white font-medium hover:shadow-lg disabled:opacity-50">
-              {loading ? 'Creating...' : '✅ Create Client'}
-            </button>
-          )}
-        </div>
-      </form>
-    </Modal>
-  );
-};
-
-// ============================================================================
-// CLIENT DETAIL MODAL
-// ============================================================================
-const ClientDetailModal = ({ isOpen, onClose, client }) => {
-  const [sessions, setSessions] = useState([]);
-  const [payments, setPayments] = useState([]);
-  const [consistency, setConsistency] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('overview');
-
-  useEffect(() => {
-    if (isOpen && client) {
-      loadClientDetails();
-    }
-  }, [isOpen, client]);
-
-  const loadClientDetails = async () => {
-    setLoading(true);
-    try {
-      const [sessionsRes, paymentsRes, consistencyRes] = await Promise.all([
-        api.getSessions({ client_id: client.id }),
-        api.getClientPayments(client.id),
-        api.getClientConsistency(client.id)
-      ]);
-
-      if (sessionsRes.success) setSessions(sessionsRes.sessions || []);
-      if (paymentsRes.success) setPayments(paymentsRes.payments || []);
-      if (consistencyRes.success) setConsistency(consistencyRes.consistency);
-    } catch (err) {
-      console.error('Failed to load client details:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const sendReminder = async () => {
-    try {
-      const result = await api.sendProgressReminder(client.id);
-      if (result.success) {
-        alert('✅ Progress reminder sent!');
-      }
-    } catch (err) {
-      alert('Failed to send reminder');
-    }
-  };
-
-  if (!client) return null;
-
-  const completedSessions = sessions.filter(s => s.status === 'completed').length;
-  const totalPaid = payments.filter(p => p.status === 'success').reduce((sum, p) => sum + parseFloat(p.amount || 0), 0);
-
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title={client.name} size="xl">
-      <div className="space-y-6">
-        {/* Header with Contact */}
-        <div className="bg-gradient-to-r from-orange-500 to-red-500 rounded-2xl p-6 text-white">
-          <div className="flex items-start justify-between">
-            <div className="flex items-center gap-4">
-              <div className="w-20 h-20 rounded-2xl bg-white/20 backdrop-blur-sm flex items-center justify-center text-4xl font-bold">
-                {client.name.charAt(0)}
-              </div>
-              <div>
-                <h3 className="text-2xl font-bold mb-2">{client.name}</h3>
-                <div className="flex items-center gap-4 text-sm opacity-90">
-                  {client.email && (
-                    <a href={`mailto:${client.email}`} className="flex items-center gap-1 hover:underline">
-                      <Mail size={14} /> {client.email}
-                    </a>
-                  )}
-                  {client.phone && (
-                    <a href={`tel:${client.phone}`} className="flex items-center gap-1 hover:underline">
-                      <Phone size={14} /> {client.phone}
-                    </a>
-                  )}
-                </div>
-              </div>
-            </div>
-            <div className="text-right">
-              <div className="text-sm opacity-75">Status</div>
-              <div className="text-2xl font-bold">Active</div>
-            </div>
-          </div>
-        </div>
-
-        {/* Stats Grid */}
-        <div className="grid grid-cols-4 gap-4">
-          <div className="bg-blue-50 rounded-xl p-4 border border-blue-200">
-            <div className="flex items-center justify-between mb-2">
-              <Calendar size={20} className="text-blue-600" />
-              <span className="text-2xl font-bold text-blue-900">{sessions.length}</span>
-            </div>
-            <div className="text-sm text-blue-700 font-medium">Total Sessions</div>
-          </div>
-
-          <div className="bg-green-50 rounded-xl p-4 border border-green-200">
-            <div className="flex items-center justify-between mb-2">
-              <CheckCircle size={20} className="text-green-600" />
-              <span className="text-2xl font-bold text-green-900">
-                {consistency?.attendance_rate || 0}%
-              </span>
-            </div>
-            <div className="text-sm text-green-700 font-medium">Attendance</div>
-          </div>
-
-          <div className="bg-purple-50 rounded-xl p-4 border border-purple-200">
-            <div className="flex items-center justify-between mb-2">
-              <DollarSign size={20} className="text-purple-600" />
-              <span className="text-2xl font-bold text-purple-900">₹{totalPaid.toFixed(0)}</span>
-            </div>
-            <div className="text-sm text-purple-700 font-medium">Total Paid</div>
-          </div>
-
-          <div className="bg-orange-50 rounded-xl p-4 border border-orange-200">
-            <div className="flex items-center justify-between mb-2">
-              <TrendingUp size={20} className="text-orange-600" />
-              <span className="text-2xl font-bold text-orange-900">{completedSessions}</span>
-            </div>
-            <div className="text-sm text-orange-700 font-medium">Completed</div>
-          </div>
-        </div>
-
-        {/* Progress Reminder Alert */}
-        {consistency?.progress_check_due && (
-          <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Bell size={24} className="text-yellow-600" />
-              <div>
-                <div className="font-semibold text-yellow-900">Progress Check Due!</div>
-                <div className="text-sm text-yellow-700">
-                  {consistency.days_since_last_check !== null 
-                    ? `Last check: ${consistency.days_since_last_check} days ago`
-                    : 'No progress checks recorded yet'
-                  }
-                </div>
-              </div>
-            </div>
-            <button onClick={sendReminder}
-              className="px-4 py-2 bg-yellow-500 text-white rounded-xl font-medium hover:bg-yellow-600 transition-colors">
-              Send Reminder
-            </button>
-          </div>
-        )}
-
-        {/* Tabs */}
-        <div className="border-b">
-          <div className="flex gap-4">
-            {['overview', 'workouts', 'attendance', 'payments'].map(tab => (
-              <button key={tab} onClick={() => setActiveTab(tab)}
-                className={`px-4 py-2 font-medium transition-all ${
-                  activeTab === tab ? 'border-b-2 border-orange-500 text-orange-600' : 'text-slate-600 hover:text-slate-900'
-                }`}>
-                {tab.charAt(0).toUpperCase() + tab.slice(1)}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Tab Content */}
-        {loading ? (
-          <div className="text-center py-12">
-            <div className="w-12 h-12 border-4 border-orange-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-            <p className="text-slate-600">Loading details...</p>
-          </div>
-        ) : (
-          <div>
-            {activeTab === 'overview' && (
-              <div className="space-y-4">
-                <div className="bg-white rounded-xl border p-6">
-                  <h4 className="font-bold text-lg mb-4 flex items-center gap-2">
-                    <Phone size={20} className="text-orange-500" />
-                    Contact Information
-                  </h4>
-                  <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div>
-                      <div className="text-slate-600 mb-1">Email</div>
-                      <div className="font-medium">{client.email || 'Not provided'}</div>
-                    </div>
-                    <div>
-                      <div className="text-slate-600 mb-1">Phone</div>
-                      <div className="font-medium">{client.phone || 'Not provided'}</div>
-                    </div>
-                    <div>
-                      <div className="text-slate-600 mb-1">Member Since</div>
-                      <div className="font-medium">{new Date(client.created_at || Date.now()).toLocaleDateString()}</div>
-                    </div>
-                    <div>
-                      <div className="text-slate-600 mb-1">Status</div>
-                      <div className="font-medium capitalize">{client.status || 'active'}</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {activeTab === 'workouts' && (
-              <div className="space-y-3">
-                <h4 className="font-bold text-lg mb-4">Assigned Workouts ({sessions.length})</h4>
-                {sessions.map((s, i) => (
-                  <div key={i} className="bg-white border rounded-xl p-4 hover:shadow-md transition-all">
-                    <div className="flex items-center justify-between">
-                      <div className="flex-1">
-                        <h5 className="font-semibold text-lg mb-1">{s.template_name || 'Session'}</h5>
-                        <div className="flex items-center gap-4 text-sm text-slate-600">
-                          <div className="flex items-center gap-1">
-                            <Calendar size={14} />
-                            {new Date(s.scheduled_at).toLocaleDateString()}
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <Clock size={14} />
-                            {new Date(s.scheduled_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                          </div>
-                          <div className="flex items-center gap-1">
-                            {s.location?.includes('online') || !s.location ? <Video size={14} /> : <MapPin size={14} />}
-                            {s.location || 'Online'}
-                          </div>
-                        </div>
-                      </div>
-                      <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                        s.status === 'completed' ? 'bg-green-100 text-green-700' : 
-                        s.status === 'scheduled' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-700'
-                      }`}>
-                        {s.status}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-                {sessions.length === 0 && (
-                  <div className="text-center py-12 text-slate-500">
-                    <Dumbbell size={48} className="mx-auto mb-4 opacity-50" />
-                    <p>No workouts assigned yet</p>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {activeTab === 'attendance' && consistency && (
-              <div className="space-y-4">
-                <div className="bg-white rounded-xl border p-6">
-                  <h4 className="font-bold text-lg mb-4">Consistency Metrics (Last 30 Days)</h4>
-                  <div className="grid grid-cols-3 gap-4">
-                    <div className="text-center p-4 bg-blue-50 rounded-xl border border-blue-200">
-                      <div className="text-3xl font-bold text-blue-600">{consistency.sessions_scheduled}</div>
-                      <div className="text-sm text-slate-600 mt-1">Scheduled</div>
-                    </div>
-                    <div className="text-center p-4 bg-green-50 rounded-xl border border-green-200">
-                      <div className="text-3xl font-bold text-green-600">{consistency.sessions_attended}</div>
-                      <div className="text-sm text-slate-600 mt-1">Attended</div>
-                    </div>
-                    <div className="text-center p-4 bg-orange-50 rounded-xl border border-orange-200">
-                      <div className="text-3xl font-bold text-orange-600">{consistency.attendance_rate}%</div>
-                      <div className="text-sm text-slate-600 mt-1">Rate</div>
-                    </div>
-                  </div>
-
-                  <div className="mt-6 p-4 bg-slate-50 rounded-xl">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-medium text-slate-700">Progress Checks</span>
-                      <span className="text-lg font-bold text-slate-900">{consistency.progress_checks}</span>
-                    </div>
-                    <div className="text-xs text-slate-600">
-                      Frequency: {client.progress_check_frequency || 'Monthly'}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {activeTab === 'payments' && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between mb-4">
-                  <h4 className="font-bold text-lg">Payment History</h4>
-                  <div className="text-sm">
-                    <span className="text-green-600 font-medium">Total Paid: ₹{totalPaid.toFixed(0)}</span>
-                  </div>
-                </div>
-                {payments.map((p, i) => (
-                  <div key={i} className="bg-white border rounded-xl p-4 flex items-center justify-between hover:shadow-md transition-all">
-                    <div className="flex items-center gap-4">
-                      <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
-                        p.status === 'success' ? 'bg-green-100' : 
-                        p.status === 'pending' ? 'bg-orange-100' : 'bg-red-100'
-                      }`}>
-                        <DollarSign size={24} className={
-                          p.status === 'success' ? 'text-green-600' :
-                          p.status === 'pending' ? 'text-orange-600' : 'text-red-600'
-                        } />
-                      </div>
-                      <div>
-                        <div className="font-semibold text-lg">₹{parseFloat(p.amount || 0).toFixed(2)}</div>
-                        <div className="text-sm text-slate-600">
-                          {new Date(p.created_at).toLocaleDateString()} • {p.payment_method || 'razorpay'}
-                        </div>
-                      </div>
-                    </div>
-                    <span className={`px-4 py-2 rounded-full text-sm font-medium ${
-                      p.status === 'success' ? 'bg-green-100 text-green-700' :
-                      p.status === 'pending' ? 'bg-orange-100 text-orange-700' :
-                      'bg-red-100 text-red-700'
-                    }`}>
-                      {p.status}
-                    </span>
-                  </div>
-                ))}
-                {payments.length === 0 && (
-                  <div className="text-center py-12 text-slate-500">
-                    <CreditCard size={48} className="mx-auto mb-4 opacity-50" />
-                    <p>No payment history</p>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    </Modal>
-  );
-};
-
-// ============================================================================
-// KEEP ALL OTHER EXISTING MODALS (from previous version)
-// ============================================================================
-
-const CoachRegistrationModal = ({ isOpen, onClose, onSuccess }) => {
-  const [formData, setFormData] = useState({
-    full_name: '', email: '', phone: '', password: '',
-    specialization: 'gym', bio: '', experience_years: 0
-  });
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    setError('');
-    
-    try {
-      const result = await api.registerCoach(formData);
-      
-      if (result.success) {
-        alert('✅ Coach registered successfully!');
-        onSuccess(result);
-        onClose();
-        setFormData({
-          full_name: '', email: '', phone: '', password: '',
-          specialization: 'gym', bio: '', experience_years: 0
-        });
-      } else {
-        setError(result.detail || result.message || 'Registration failed');
-      }
-    } catch (err) {
-      setError(err.message || 'Failed to register coach');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Register New Coach" size="md">
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium mb-2">Full Name *</label>
-          <input type="text" required value={formData.full_name} 
-            onChange={(e) => setFormData({...formData, full_name: e.target.value})}
-            className="w-full px-4 py-3 rounded-xl border focus:border-purple-500 focus:ring-2 focus:ring-purple-200 outline-none" />
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium mb-2">Email *</label>
-            <input type="email" required value={formData.email}
-              onChange={(e) => setFormData({...formData, email: e.target.value})}
-              className="w-full px-4 py-3 rounded-xl border focus:border-purple-500 outline-none" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-2">Phone *</label>
-            <input type="tel" required value={formData.phone}
-              onChange={(e) => setFormData({...formData, phone: e.target.value})}
-              className="w-full px-4 py-3 rounded-xl border focus:border-purple-500 outline-none"
-              placeholder="+91 98765 43210" />
-          </div>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium mb-2">Password</label>
-          <input type="password" value={formData.password}
-            onChange={(e) => setFormData({...formData, password: e.target.value})}
-            className="w-full px-4 py-3 rounded-xl border focus:border-purple-500 outline-none" />
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium mb-2">Specialization *</label>
-            <select value={formData.specialization}
-              onChange={(e) => setFormData({...formData, specialization: e.target.value})}
-              className="w-full px-4 py-3 rounded-xl border focus:border-purple-500 outline-none">
-              <option value="yoga">🧘 Yoga</option>
-              <option value="gym">🏋️ Gym</option>
-              <option value="cardio">🏃 Cardio</option>
-              <option value="nutrition">🥗 Nutrition</option>
-              <option value="pilates">🤸 Pilates</option>
-              <option value="crossfit">💪 CrossFit</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-2">Experience (years)</label>
-            <input type="number" min="0" value={formData.experience_years}
-              onChange={(e) => setFormData({...formData, experience_years: parseInt(e.target.value) || 0})}
-              className="w-full px-4 py-3 rounded-xl border focus:border-purple-500 outline-none" />
-          </div>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium mb-2">Bio</label>
-          <textarea value={formData.bio}
-            onChange={(e) => setFormData({...formData, bio: e.target.value})}
-            className="w-full px-4 py-3 rounded-xl border focus:border-purple-500 outline-none"
-            rows={3} placeholder="Tell us about your coaching experience..." />
-        </div>
-
-        {error && (
-          <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm">
-            ❌ {error}
-          </div>
-        )}
-
-        <button type="submit" disabled={loading}
-          className="w-full px-4 py-3 rounded-xl bg-gradient-to-r from-purple-500 to-pink-500 text-white font-medium hover:shadow-lg transition-all disabled:opacity-50">
-          {loading ? 'Registering...' : '✨ Register as Coach'}
-        </button>
-      </form>
-    </Modal>
-  );
-};
-
-const AddWorkoutModal = ({ isOpen, onClose, onSuccess }) => {
-  const [formData, setFormData] = useState({
-    name: '', description: '', category: 'gym', difficulty_level: 'intermediate',
-    duration_minutes: 60, equipment_needed: [], tags: []
-  });
-  const [loading, setLoading] = useState(false);
-  const [equipment, setEquipment] = useState('');
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    try {
-      const result = await api.createWorkout(formData);
-      if (result.success) {
-        alert('✅ Workout added to library!');
-        onSuccess();
-        onClose();
-        setFormData({ name: '', description: '', category: 'gym', difficulty_level: 'intermediate', duration_minutes: 60, equipment_needed: [], tags: [] });
-      }
-    } catch (err) {
-      alert('Failed: ' + err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const addEquipment = () => {
-    if (equipment.trim()) {
-      setFormData({...formData, equipment_needed: [...formData.equipment_needed, equipment.trim()]});
-      setEquipment('');
-    }
-  };
-
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Add Workout to Library">
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium mb-2">Workout Name *</label>
-          <input type="text" required value={formData.name}
-            onChange={(e) => setFormData({...formData, name: e.target.value})}
-            className="w-full px-4 py-3 rounded-xl border outline-none"
-            placeholder="e.g., HIIT Full Body Blast" />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium mb-2">Description</label>
-          <textarea value={formData.description}
-            onChange={(e) => setFormData({...formData, description: e.target.value})}
-            className="w-full px-4 py-3 rounded-xl border outline-none" rows={3} />
-        </div>
-
-        <div className="grid grid-cols-3 gap-4">
-          <div>
-            <label className="block text-sm font-medium mb-2">Category *</label>
-            <select value={formData.category}
-              onChange={(e) => setFormData({...formData, category: e.target.value})}
-              className="w-full px-4 py-3 rounded-xl border outline-none">
-              <option value="yoga">🧘 Yoga</option>
-              <option value="gym">🏋️ Gym</option>
-              <option value="cardio">🏃 Cardio</option>
-              <option value="hiit">⚡ HIIT</option>
-              <option value="nutrition">🥗 Nutrition</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium mb-2">Difficulty</label>
-            <select value={formData.difficulty_level}
-              onChange={(e) => setFormData({...formData, difficulty_level: e.target.value})}
-              className="w-full px-4 py-3 rounded-xl border outline-none">
-              <option value="beginner">Beginner</option>
-              <option value="intermediate">Intermediate</option>
-              <option value="advanced">Advanced</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium mb-2">Duration (min)</label>
-            <input type="number" value={formData.duration_minutes}
-              onChange={(e) => setFormData({...formData, duration_minutes: parseInt(e.target.value) || 60})}
-              className="w-full px-4 py-3 rounded-xl border outline-none" />
-          </div>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium mb-2">Equipment</label>
-          <div className="flex gap-2 mb-2">
-            <input type="text" value={equipment}
-              onChange={(e) => setEquipment(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addEquipment())}
-              className="flex-1 px-4 py-3 rounded-xl border outline-none" />
-            <button type="button" onClick={addEquipment}
-              className="px-6 py-3 rounded-xl bg-purple-100 text-purple-700">Add</button>
-          </div>
-          {formData.equipment_needed.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {formData.equipment_needed.map((eq, i) => (
-                <span key={i} className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-sm flex items-center gap-2">
-                  {eq}
-                  <button type="button" onClick={() => setFormData({...formData, equipment_needed: formData.equipment_needed.filter((_, idx) => idx !== i)})}
-                    className="font-bold">×</button>
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <button type="submit" disabled={loading}
-          className="w-full px-4 py-3 rounded-xl bg-gradient-to-r from-purple-500 to-indigo-500 text-white font-medium">
-          {loading ? 'Adding...' : '📚 Add to Library'}
-        </button>
-      </form>
-    </Modal>
-  );
-};
-
-const AssignWorkoutModal = ({ isOpen, onClose, onSuccess, clients, workouts }) => {
-  const [selectedWorkout, setSelectedWorkout] = useState('');
-  const [selectedClient, setSelectedClient] = useState('');
-  const [dates, setDates] = useState(['']);
-  const [loading, setLoading] = useState(false);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    try {
-      const coaches = await api.getCoaches();
-      const coachId = coaches.coaches?.[0]?.id || 'default';
-      
-      const result = await api.assignWorkout({
-        workout_id: selectedWorkout,
-        client_id: selectedClient,
-        scheduled_dates: dates.filter(d => d),
-        coach_id: coachId,
-        notes: 'Assigned from workout library'
-      });
-      if (result.success) {
-        alert(`✅ Workout assigned! ${result.sessions_created} sessions created.`);
-        onSuccess();
-        onClose();
-      }
-    } catch (err) {
-      alert('Failed: ' + err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Assign Workout to Client">
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium mb-2">Select Workout *</label>
-          <select required value={selectedWorkout}
-            onChange={(e) => setSelectedWorkout(e.target.value)}
-            className="w-full px-4 py-3 rounded-xl border outline-none">
-            <option value="">Choose a workout...</option>
-            {workouts.map(w => (
-              <option key={w.id} value={w.id}>{w.name} ({w.category})</option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium mb-2">Select Client *</label>
-          <select required value={selectedClient}
-            onChange={(e) => setSelectedClient(e.target.value)}
-            className="w-full px-4 py-3 rounded-xl border outline-none">
-            <option value="">Choose a client...</option>
-            {clients.map(c => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium mb-2">Schedule Dates *</label>
-          {dates.map((date, i) => (
-            <div key={i} className="flex gap-2 mb-2">
-              <input type="datetime-local" value={date}
-                onChange={(e) => {
-                  const newDates = [...dates];
-                  newDates[i] = e.target.value;
-                  setDates(newDates);
-                }}
-                className="flex-1 px-4 py-3 rounded-xl border outline-none" />
-              {i === dates.length - 1 && (
-                <button type="button" onClick={() => setDates([...dates, ''])}
-                  className="px-4 py-3 rounded-xl bg-purple-100 text-purple-700">+</button>
-              )}
-            </div>
-          ))}
-        </div>
-
-        <button type="submit" disabled={loading}
-          className="w-full px-4 py-3 rounded-xl bg-gradient-to-r from-green-500 to-emerald-500 text-white font-medium">
-          {loading ? 'Assigning...' : '✅ Assign Workout'}
-        </button>
-      </form>
-    </Modal>
-  );
-};
-
-const AddClientModal = ({ isOpen, onClose, onSuccess }) => {
-  const [formData, setFormData] = useState({ name: '', email: '', phone: '' });
-  const [loading, setLoading] = useState(false);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    try {
-      const result = await api.createClient(formData);
-      if (result.success) {
-        onSuccess();
-        onClose();
-        setFormData({ name: '', email: '', phone: '' });
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Quick Add Client">
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium mb-2">Full Name *</label>
-          <input type="text" required value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} className="w-full px-4 py-3 rounded-xl border outline-none" />
-        </div>
-        <div>
-          <label className="block text-sm font-medium mb-2">Email</label>
-          <input type="email" value={formData.email} onChange={(e) => setFormData({...formData, email: e.target.value})} className="w-full px-4 py-3 rounded-xl border outline-none" />
-        </div>
-        <div>
-          <label className="block text-sm font-medium mb-2">Phone</label>
-          <input type="tel" value={formData.phone} onChange={(e) => setFormData({...formData, phone: e.target.value})} className="w-full px-4 py-3 rounded-xl border outline-none" />
-        </div>
-        <div className="flex gap-3">
-          <button type="button" onClick={onClose} className="flex-1 px-4 py-3 rounded-xl border">Cancel</button>
-          <button type="submit" disabled={loading} className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-orange-500 to-red-500 text-white">
-            {loading ? 'Creating...' : 'Create'}
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
-};
-
-const ScheduleSessionModal = ({ isOpen, onClose, onSuccess, clients }) => {
-  const [formData, setFormData] = useState({
-    client_id: '', scheduled_at: '', duration_minutes: 60, location_type: 'online', notes: '',recurrence_type: 'once',num_sessions: 1
-  });
-  const [loading, setLoading] = useState(false);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    try {
-      let result;
-      if (formData.recurrence_type !== 'once') {
-        const [date, time] = formData.scheduled_at.split('T');
-        result = await api.createRecurringSessions({
-          client_id: formData.client_id,
-          recurrence_type: formData.recurrence_type,
-          start_date: date,
-          time: time || '09:00',
-          num_sessions: formData.num_sessions,
-          duration_minutes: formData.duration_minutes,
-          location: formData.location_type
-        });
-      } else {
-        result = await api.createSession(formData);
-      }
-      if (result.success) {
-        alert(result.message || 'Session(s) created!');
-        onSuccess();
-        onClose();
-      }
-    } catch (err) {
-      alert('Failed to create session: ' + err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Schedule Session">
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium mb-2">Client *</label>
-          <select required value={formData.client_id} onChange={(e) => setFormData({...formData, client_id: e.target.value})} className="w-full px-4 py-3 rounded-xl border outline-none">
-            <option value="">Select client...</option>
-            {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="block text-sm font-medium mb-2">Date & Time *</label>
-          <input type="datetime-local" required value={formData.scheduled_at} onChange={(e) => setFormData({...formData, scheduled_at: e.target.value})} className="w-full px-4 py-3 rounded-xl border outline-none" />
-        </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium mb-2">Duration (min)</label>
-            <input type="number" value={formData.duration_minutes} onChange={(e) => setFormData({...formData, duration_minutes: parseInt(e.target.value)})} className="w-full px-4 py-3 rounded-xl border outline-none" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-2">Location</label>
-            <select value={formData.location_type} onChange={(e) => setFormData({...formData, location_type: e.target.value})} className="w-full px-4 py-3 rounded-xl border outline-none">
-              <option value="online">Online</option>
-              <option value="offline">Offline</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-2">Recurrence</label>
-            <select value={formData.recurrence_type}
-              onChange={(e) => setFormData({...formData, recurrence_type: e.target.value})}
-              className="w-full px-4 py-3 rounded-xl border outline-none">
-              <option value="once">One-time session</option>
-              <option value="daily">Daily</option>
-              <option value="weekly">Weekly</option>
-              <option value="biweekly">Bi-weekly</option>
-              <option value="monthly">Monthly</option>
-            </select>
-          </div>
-          
-          {formData.recurrence_type !== 'once' && (
-            <div>
-              <label className="block text-sm font-medium mb-2">Number of Sessions</label>
-              <input type="number" min="1" max="52" value={formData.num_sessions}
-                onChange={(e) => setFormData({...formData, num_sessions: parseInt(e.target.value) || 1})}
-                className="w-full px-4 py-3 rounded-xl border outline-none"
-                placeholder="e.g., 10 sessions" />
-            </div>
-          )}
-        </div>
-        <div className="flex gap-3">
-          <button type="button" onClick={onClose} className="flex-1 px-4 py-3 rounded-xl border">Cancel</button>
-          <button type="submit" disabled={loading} className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-500 text-white">
-            {loading ? 'Scheduling...' : 'Schedule'}
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
-};
-
-const CreatePaymentLinkModal = ({ isOpen, onClose, clients }) => {
-  const [formData, setFormData] = useState({ client_id: '', amount: '', plan_id: 'custom' });
-  const [loading, setLoading] = useState(false);
-  const [paymentLink, setPaymentLink] = useState('');
-
-const handleSubmit = async (e) => {
-  e.preventDefault();
-  setLoading(true);
-  try {
-    const result = await api.createPaymentLink({
-      client_id: formData.client_id,
-      amount: formData.amount,
-      plan_id: formData.plan_id
-    });
-    if (result.success) {
-      setPaymentLink(result.payment_link);
-    }
-  } catch (err) {
-    alert('Failed to create payment link: ' + err.message);
-  } finally {
-    setLoading(false);
-  }
-};
-
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Create Payment Link">
-      {!paymentLink ? (
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium mb-2">Client *</label>
-            <select required value={formData.client_id} onChange={(e) => setFormData({...formData, client_id: e.target.value})} className="w-full px-4 py-3 rounded-xl border outline-none">
-              <option value="">Select client...</option>
-              {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-2">Amount (₹) *</label>
-            <input type="number" required value={formData.amount} onChange={(e) => setFormData({...formData, amount: e.target.value})} className="w-full px-4 py-3 rounded-xl border outline-none" />
-          </div>
-          <button type="submit" disabled={loading} className="w-full px-4 py-3 rounded-xl bg-gradient-to-r from-green-500 to-emerald-500 text-white">
-            {loading ? 'Creating...' : 'Generate Link'}
-          </button>
-        </form>
-      ) : (
-        <div className="space-y-4">
-          <div className="p-4 bg-green-50 rounded-xl"><a href={paymentLink} target="_blank" className="text-blue-600 underline break-all">{paymentLink}</a></div>
-          <button onClick={() => { navigator.clipboard.writeText(paymentLink); alert('Copied!'); }} className="w-full px-4 py-3 rounded-xl bg-slate-100">Copy Link</button>
-        </div>
-      )}
-    </Modal>
-  );
-};
-
-// ============================================================================
-// LAYOUT COMPONENTS
-// ============================================================================
-
-const Sidebar = ({ activeTab, setActiveTab, isMobileMenuOpen, setIsMobileMenuOpen }) => {
-  const items = [
-    { id: 'dashboard', icon: BarChart3, label: 'Dashboard' },
-    { id: 'clients', icon: Users, label: 'Clients' },
-    { id: 'sessions', icon: Calendar, label: 'Sessions' },
-    { id: 'manage-sessions', icon: Calendar, label: 'Manage Sessions' },
-    { id: 'workouts', icon: Dumbbell, label: 'Workouts' },
-    { id: 'coaches', icon: UserPlus, label: 'Coaches' },
-    { id: 'payments', icon: DollarSign, label: 'Payments' },
-    { id: 'referrals', icon: Share2, label: 'Referrals' },
-  ];
-
-  return (
-    <>
-      {isMobileMenuOpen && <div className="fixed inset-0 bg-black/60 z-40 lg:hidden" onClick={() => setIsMobileMenuOpen(false)} />}
-      <div className={`fixed lg:sticky top-0 left-0 h-screen bg-gradient-to-br from-slate-900 to-slate-800 text-white w-72 flex flex-col z-50 transition-transform ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
-        <div className="p-6 border-b border-white/10">
-          <div className="flex items-center gap-3">
-            <div className="text-3xl">💪</div>
-            <div><h2 className="font-bold text-lg">FitLife Coaching</h2></div>
-            <button onClick={() => setIsMobileMenuOpen(false)} className="lg:hidden ml-auto"><X size={20} /></button>
-          </div>
-        </div>
-        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          {items.map(item => (
-            <button key={item.id} onClick={() => { setActiveTab(item.id); setIsMobileMenuOpen(false); }} 
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === item.id ? 'bg-gradient-to-r from-orange-500 to-red-500' : 'hover:bg-white/5'}`}>
-              <item.icon size={20} />
-              <span>{item.label}</span>
-            </button>
-          ))}
-        </nav>
-      </div>
-    </>
-  );
-};
-
-const Header = ({ setIsMobileMenuOpen }) => (
-  <header className="bg-white border-b sticky top-0 z-30">
-    <div className="px-6 py-4 flex items-center justify-between">
-      <div className="flex items-center gap-4">
-        <button onClick={() => setIsMobileMenuOpen(true)} className="lg:hidden"><Menu size={24} /></button>
-        <div><h1 className="text-2xl font-bold">Welcome Back! 👋</h1></div>
-      </div>
-      <button className="relative p-2 hover:bg-slate-100 rounded-xl"><Bell size={20} /></button>
-    </div>
-  </header>
-);
-
-const StatCard = ({ icon: Icon, label, value, color = 'orange' }) => {
-  const colors = { orange: 'from-orange-500 to-red-500', blue: 'from-blue-500 to-indigo-500', green: 'from-green-500 to-emerald-500', purple: 'from-purple-500 to-pink-500' };
-  return (
-    <div className="bg-white rounded-2xl p-6 border hover:shadow-lg transition-all">
-      <div className="flex items-start justify-between">
-        <div><p className="text-sm font-medium text-slate-600 mb-1">{label}</p><p className="text-3xl font-bold">{value}</p></div>
-        <div className={`p-3 rounded-xl bg-gradient-to-br ${colors[color]} shadow-lg`}><Icon size={24} className="text-white" /></div>
-      </div>
+    <div className={`fixed top-4 right-4 z-[60] ${type === 'error' ? 'bg-red-500' : 'bg-emerald-500'} text-white px-6 py-3 rounded-xl shadow-lg flex items-center gap-3 animate-slideIn`}>
+      {type === 'success' ? <CheckCircle size={20} /> : <AlertCircle size={20} />}
+      <span className="font-medium">{message}</span>
     </div>
   );
 };
 
-// ============================================================================
-// VIEWS
-// ============================================================================
-
-const Dashboard = ({ clients, sessions, stats }) => (
-  <div className="space-y-6">
-    <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-      <StatCard icon={Users} label="Total Clients" value={stats?.total_clients || clients.length} color="orange" />
-      <StatCard icon={Calendar} label="Sessions" value={stats?.total_sessions || sessions.length} color="blue" />
-      <StatCard icon={CheckCircle} label="Completed" value={stats?.completed_sessions || 0} color="green" />
-      <StatCard icon={DollarSign} label="Revenue" value={`₹${(stats?.total_revenue || 0).toFixed(0)}`} color="purple" />
-    </div>
-    <div className="bg-white rounded-2xl border p-6">
-      <h2 className="text-xl font-bold mb-4">Recent Sessions</h2>
-      <div className="space-y-3">
-        {sessions.slice(0, 5).map((s, i) => (
-          <div key={i} className="flex items-center gap-4 p-4 rounded-xl bg-slate-50 border">
-            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center text-white font-bold">{s.client_name?.charAt(0)}</div>
-            <div className="flex-1"><p className="font-semibold">{s.client_name}</p><p className="text-sm text-slate-600">{s.template_name || 'Session'}</p></div>
-            <div className="text-right"><p className="text-sm font-medium capitalize">{s.status}</p></div>
-          </div>
-        ))}
-      </div>
-    </div>
+const EmptyState = ({ icon: Icon, title, subtitle, action }) => (
+  <div className="text-center py-16">
+    <div className="w-20 h-20 rounded-2xl bg-slate-100 flex items-center justify-center mx-auto mb-4"><Icon size={36} className="text-slate-400" /></div>
+    <h3 className="text-lg font-semibold text-slate-700 mb-1">{title}</h3>
+    <p className="text-slate-500 mb-4">{subtitle}</p>
+    {action}
   </div>
 );
 
-const ClientsView = ({ clients, onRefresh }) => {
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [isAddEnhancedModalOpen, setIsAddEnhancedModalOpen] = useState(false);
-  const [selectedClient, setSelectedClient] = useState(null);
+const StatusBadge = ({ status }) => {
+  const st = { scheduled:'bg-blue-100 text-blue-700', in_progress:'bg-yellow-100 text-yellow-800', completed:'bg-emerald-100 text-emerald-700', cancelled:'bg-red-100 text-red-700', no_show:'bg-orange-100 text-orange-700' };
+  const lb = { scheduled:'Scheduled', in_progress:'In Progress', completed:'Completed', cancelled:'Cancelled', no_show:'Absent' };
+  return <span className={`px-3 py-1 rounded-full text-xs font-bold ${st[status]||'bg-slate-100 text-slate-600'}`}>{lb[status]||status}</span>;
+};
 
+const BulkImportForm = ({ type, onSubmit, columns, sampleRow }) => {
+  const [csvText, setCsvText] = useState('');
+  const [parsed, setParsed] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const fileRef = useRef(null);
+  const handleFile = (e) => { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = (ev) => { setCsvText(ev.target.result); setParsed(parseCSV(ev.target.result)); }; r.readAsText(f); };
+  const handleSubmit = async () => { if (!parsed.length) return; setLoading(true); await onSubmit(parsed); setLoading(false); };
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold">Client Management</h2>
-        <div className="flex gap-2">
-          <button onClick={() => setIsAddModalOpen(true)} 
-            className="bg-slate-600 text-white px-6 py-3 rounded-xl font-medium flex items-center gap-2 hover:bg-slate-700 transition-colors">
-            <Plus size={20} />Quick Add
-          </button>
-          <button onClick={() => setIsAddEnhancedModalOpen(true)} 
-            className="bg-gradient-to-r from-orange-500 to-red-500 text-white px-6 py-3 rounded-xl font-medium flex items-center gap-2 hover:shadow-lg transition-all">
-            <Plus size={20} />Add Full Profile
-          </button>
-        </div>
-      </div>
-
-      <div className="grid md:grid-cols-3 gap-6">
-        {clients.map(c => (
-          <div key={c.id} className="bg-white rounded-2xl border p-6 hover:shadow-xl transition-all group">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center text-white text-xl font-bold">{(c.name || '?').charAt(0)}</div>
-              <div className="flex-1">
-                <h3 className="font-bold">{c.name}</h3>
-                <p className="text-sm text-slate-500">{c.email || c.phone || 'No contact'}</p>
-              </div>
-              <button onClick={() => setSelectedClient(c)}
-                className="opacity-0 group-hover:opacity-100 transition-opacity p-2 hover:bg-slate-100 rounded-lg"
-                title="View Details">
-                <Eye size={20} className="text-slate-600" />
-              </button>
-            </div>
-
-            <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl text-sm">
-              <span className="text-slate-600">Member since</span>
-              <span className="font-medium">{c.created_at ? new Date(c.created_at).toLocaleDateString() : 'N/A'}</span>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <AddClientModal isOpen={isAddModalOpen} onClose={() => setIsAddModalOpen(false)} onSuccess={onRefresh} />
-      <AddClientEnhancedModal isOpen={isAddEnhancedModalOpen} onClose={() => setIsAddEnhancedModalOpen(false)} onSuccess={onRefresh} />
-      <ClientDetailModal isOpen={!!selectedClient} onClose={() => setSelectedClient(null)} client={selectedClient} />
+    <div className="space-y-4">
+      <div className="bg-blue-50 rounded-xl p-4 text-sm"><p className="font-semibold text-blue-800 mb-1">CSV columns:</p><code className="text-blue-600">{columns.join(', ')}</code><p className="text-blue-600 mt-1">Example: <code>{sampleRow}</code></p></div>
+      <div className="flex gap-2"><input ref={fileRef} type="file" accept=".csv,.txt" onChange={handleFile} className="hidden" /><button onClick={() => fileRef.current?.click()} className="flex-1 py-3 border-2 border-dashed rounded-xl text-sm font-medium hover:bg-slate-50 flex items-center justify-center gap-2"><Upload size={18} /> Choose CSV file</button></div>
+      <div><label className="block text-sm font-medium mb-1">Or paste CSV data:</label><textarea value={csvText} onChange={e => { setCsvText(e.target.value); setParsed(parseCSV(e.target.value)); }} rows={5} className="w-full px-4 py-3 rounded-xl border outline-none font-mono text-sm" placeholder={`${columns.join(',')}\n${sampleRow}`} /></div>
+      {parsed.length > 0 && <div className="bg-emerald-50 rounded-xl p-4"><p className="font-semibold text-emerald-800">{parsed.length} {type} ready to import</p></div>}
+      <button onClick={handleSubmit} disabled={loading || !parsed.length} className="w-full py-3 bg-emerald-600 text-white rounded-xl font-bold disabled:opacity-50">{loading ? 'Importing...' : `Import ${parsed.length} ${type}`}</button>
     </div>
   );
 };
 
-const SessionsView = ({ sessions, clients, onRefresh }) => {
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold">Sessions</h2>
-        <button onClick={() => setIsModalOpen(true)} className="bg-gradient-to-r from-blue-500 to-indigo-500 text-white px-6 py-3 rounded-xl font-medium flex items-center gap-2">
-          <Plus size={20} />Schedule Session
-        </button>
-      </div>
-      <div className="bg-white rounded-2xl border overflow-hidden">
-        <table className="w-full">
-          <thead className="bg-slate-50 border-b">
-            <tr>
-              <th className="px-6 py-4 text-left text-sm font-semibold">Client</th>
-              <th className="px-6 py-4 text-left text-sm font-semibold">Date & Time</th>
-              <th className="px-6 py-4 text-left text-sm font-semibold">Status</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y">
-            {sessions.map((s, i) => (
-              <tr key={i} className="hover:bg-slate-50">
-                <td className="px-6 py-4"><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-full bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center text-white font-bold">{s.client_name?.charAt(0)}</div><span className="font-medium">{s.client_name}</span></div></td>
-                <td className="px-6 py-4 text-sm">{new Date(s.scheduled_at).toLocaleString()}</td>
-                <td className="px-6 py-4"><span className={`px-3 py-1 rounded-full text-xs font-medium ${s.status === 'completed' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>{s.status}</span></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <ScheduleSessionModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} onSuccess={onRefresh} clients={clients} />
-    </div>
-  );
-};
-
-const WorkoutsView = () => {
-  const [workouts, setWorkouts] = useState([]);
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
-  const [filter, setFilter] = useState('all');
-  const [clients, setClients] = useState([]);
-
-  const loadWorkouts = async () => {
-    const result = await api.getWorkouts(filter === 'all' ? null : filter);
-    if (result.success) setWorkouts(result.workouts);
-  };
-
-  const loadClients = async () => {
-    const result = await api.getClients();
-    if (result.success) setClients(result.clients);
-  };
-
-  useEffect(() => { loadWorkouts(); loadClients(); }, [filter]);
-
-  return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold">📚 Workout Library</h2>
-        <div className="flex gap-2">
-          <button onClick={() => setIsAssignModalOpen(true)} className="bg-gradient-to-r from-green-500 to-emerald-500 text-white px-6 py-3 rounded-xl font-medium flex items-center gap-2">
-            <CheckCircle size={20} />Assign to Client
-          </button>
-          <button onClick={() => setIsAddModalOpen(true)} className="bg-gradient-to-r from-purple-500 to-indigo-500 text-white px-6 py-3 rounded-xl font-medium flex items-center gap-2">
-            <Plus size={20} />Add Workout
-          </button>
-        </div>
-      </div>
-
-      <div className="flex gap-2 overflow-x-auto pb-2">
-        {['all', 'yoga', 'gym', 'cardio', 'hiit', 'nutrition', 'pilates'].map(cat => (
-          <button key={cat} onClick={() => setFilter(cat)}
-            className={`px-4 py-2 rounded-xl font-medium whitespace-nowrap transition-all ${
-              filter === cat ? 'bg-purple-500 text-white shadow-lg' : 'bg-white border hover:border-purple-500'
-            }`}>
-            {cat.charAt(0).toUpperCase() + cat.slice(1)}
-          </button>
-        ))}
-      </div>
-
-      <div className="grid md:grid-cols-3 gap-6">
-        {workouts.map(w => (
-          <div key={w.id} className="bg-white rounded-2xl border p-6 hover:shadow-xl transition-all group">
-            <div className="mb-4">
-              <div className="flex items-center justify-between mb-3">
-                <span className="px-3 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-700">{w.category}</span>
-                <div className="flex items-center gap-2 text-sm text-slate-500"><Clock size={16} />{w.duration_minutes} min</div>
-              </div>
-              <h3 className="font-bold text-lg mb-2 group-hover:text-purple-600 transition-colors">{w.name}</h3>
-              <p className="text-sm text-slate-600 line-clamp-2">{w.description}</p>
-            </div>
-            <div className="pt-4 border-t flex items-center justify-between text-sm">
-              <span className="text-slate-500">By: {w.created_by_name || 'Coach'}</span>
-              <span className="font-medium text-purple-600">{w.times_used || 0} uses</span>
-            </div>
-          </div>
-        ))}
-        {workouts.length === 0 && (
-          <div className="col-span-3 text-center py-12 text-slate-500">
-            <Dumbbell size={48} className="mx-auto mb-4 opacity-50" />
-            <p>No workouts in this category yet. Add your first workout!</p>
-          </div>
-        )}
-      </div>
-
-      <AddWorkoutModal isOpen={isAddModalOpen} onClose={() => setIsAddModalOpen(false)} onSuccess={loadWorkouts} />
-      <AssignWorkoutModal isOpen={isAssignModalOpen} onClose={() => setIsAssignModalOpen(false)} onSuccess={loadWorkouts} clients={clients} workouts={workouts} />
-    </div>
-  );
-};
-
-const CoachesView = () => {
-  const [coaches, setCoaches] = useState([]);
-  const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
+// === TODAY VIEW ===
+const TodayView = ({ onNavigate, showToast }) => {
+  const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [activeSession, setActiveSession] = useState(null);
 
-  const loadCoaches = async () => {
+  const load = async () => {
     setLoading(true);
     try {
-      const result = await api.getCoaches();
-      if (result.success) setCoaches(result.coaches);
-    } finally {
-      setLoading(false);
+      const r = await api.getTodaySchedule();
+      if (r.success) setSessions(r.sessions || []);
+    } catch(e) {
+      try { const r = await api.getSessions(); if (r.success) { const today = new Date().toDateString(); setSessions((r.sessions||[]).filter(s => new Date(s.scheduled_at).toDateString() === today)); } } catch(e2) {}
     }
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, []);
+
+  const handleAttendance = async (id, status) => {
+    try { await api.markAttendance(id, status); showToast(`Marked as ${status === 'attended' ? 'present' : 'absent'}`); load(); } catch (e) { showToast('Failed', 'error'); }
+  };
+  const handleStart = async (session) => {
+    try { const r = await api.startSession(session.id); if (r.success) { setActiveSession({ ...session, status: 'in_progress', workout: r.workout }); showToast('Session started!'); load(); } } catch (e) { showToast('Failed to start', 'error'); }
+  };
+  const handleComplete = async (sessionId, notes, exercisesCompleted) => {
+    try { await api.completeSession(sessionId, { notes, exercises_completed: exercisesCompleted }); showToast('Session completed!'); setActiveSession(null); load(); } catch (e) { showToast('Failed', 'error'); }
+  };
+  const handleReminders = async () => {
+    const pending = sessions.filter(s => s.status === 'scheduled').map(s => s.id);
+    if (!pending.length) { showToast('No upcoming sessions', 'info'); return; }
+    try { await api.sendReminders(pending, 'sms'); showToast(`Reminders sent to ${pending.length} clients`); } catch (e) { showToast('Failed', 'error'); }
   };
 
-  useEffect(() => { loadCoaches(); }, []);
+  if (activeSession) return <ActiveSessionView session={activeSession} onComplete={handleComplete} onBack={() => { setActiveSession(null); load(); }} showToast={showToast} />;
+
+  const upcoming = sessions.filter(s => s.status === 'scheduled' || s.status === 'confirmed');
+  const inProgress = sessions.filter(s => s.status === 'in_progress');
+  const done = sessions.filter(s => ['completed','no_show','cancelled'].includes(s.status));
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold">👥 Coach Management</h2>
-        <button onClick={() => setIsRegisterModalOpen(true)} className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-6 py-3 rounded-xl font-medium flex items-center gap-2 hover:shadow-lg">
-          <UserPlus size={20} />Register New Coach
-        </button>
+      <div className="flex items-center justify-between">
+        <div><h1 className="text-2xl font-bold text-slate-800">Today's Schedule</h1><p className="text-slate-500">{new Date().toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p></div>
+        <div className="flex gap-2">
+          {upcoming.length > 0 && <button onClick={handleReminders} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-50 text-blue-700 hover:bg-blue-100 text-sm font-medium"><Bell size={16} /> Send Reminders ({upcoming.length})</button>}
+          <button onClick={load} className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-sm font-medium">Refresh</button>
+        </div>
       </div>
 
-      {loading ? (
-        <div className="text-center py-12">
-          <div className="w-12 h-12 border-4 border-purple-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-        </div>
-      ) : (
-        <div className="grid md:grid-cols-3 gap-6">
-          {coaches.map(c => (
-            <div key={c.id} className="bg-white rounded-2xl border p-6 hover:shadow-xl transition-all">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white text-2xl font-bold">{(c.full_name || c.name || '?').charAt(0)}</div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="bg-white rounded-xl p-4 border"><div className="text-2xl font-bold">{sessions.length}</div><div className="text-xs text-slate-500">Total Today</div></div>
+        <div className="bg-white rounded-xl p-4 border"><div className="text-2xl font-bold text-blue-600">{upcoming.length}</div><div className="text-xs text-slate-500">Upcoming</div></div>
+        <div className="bg-white rounded-xl p-4 border"><div className="text-2xl font-bold text-yellow-600">{inProgress.length}</div><div className="text-xs text-slate-500">In Progress</div></div>
+        <div className="bg-white rounded-xl p-4 border"><div className="text-2xl font-bold text-emerald-600">{done.filter(s=>s.status==='completed').length}</div><div className="text-xs text-slate-500">Completed</div></div>
+      </div>
+
+      {loading ? <div className="text-center py-12"><div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto" /></div> :
+       sessions.length === 0 ? <EmptyState icon={Calendar} title="No sessions today" subtitle="Schedule sessions from the Planner tab" action={<button onClick={() => onNavigate('schedule')} className="px-6 py-2 bg-blue-600 text-white rounded-xl font-medium">Go to Planner</button>} /> :
+      <div className="space-y-3">
+        {inProgress.map(s => (
+          <div key={s.id} className="bg-yellow-50 border-2 border-yellow-300 rounded-2xl p-5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-xl bg-yellow-400 text-white flex items-center justify-center text-lg font-bold">{(s.client_name||'?')[0]}</div>
+                <div><h3 className="font-bold text-lg">{s.client_name}</h3><p className="text-sm text-slate-600">{s.workout_name || 'General Session'}</p></div>
+              </div>
+              <button onClick={() => setActiveSession(s)} className="px-5 py-2.5 bg-yellow-500 text-white rounded-xl font-bold hover:bg-yellow-600 flex items-center gap-2"><Eye size={18} /> View Session</button>
+            </div>
+          </div>
+        ))}
+        {upcoming.map(s => (
+          <div key={s.id} className="bg-white border rounded-2xl p-5 hover:shadow-md transition-all">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center text-lg font-bold">{(s.client_name||'?')[0]}</div>
                 <div>
-                  <h3 className="font-bold text-lg">{c.full_name || c.name}</h3>
-                  <p className="text-sm text-slate-500">{c.email || ''}</p>
+                  <h3 className="font-bold text-lg">{s.client_name}</h3>
+                  <p className="text-sm text-slate-500">{new Date(s.scheduled_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}{s.workout_name && <> &bull; <span className="text-indigo-600">{s.workout_name}</span></>}{s.duration_minutes && <> &bull; {s.duration_minutes}min</>}</p>
                 </div>
               </div>
-              <div className="space-y-2 text-sm">
-                <div className="flex items-center justify-between p-2 bg-purple-50 rounded-lg">
-                  <span className="text-slate-600">Specialization</span>
-                  <span className="font-medium text-purple-700 capitalize">
-                    {(() => {
-                      try {
-                        const m = typeof c.metadata === 'string' ? JSON.parse(c.metadata) : c.metadata;
-                        return m?.specialization || 'General';
-                      } catch { return 'General'; }
-                    })()}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between p-2 bg-slate-50 rounded-lg">
-                  <span className="text-slate-600">Total Sessions</span>
-                  <span className="font-medium">{c.total_sessions || 0}</span>
-                </div>
+              <div className="flex items-center gap-2">
+                <button onClick={() => handleAttendance(s.id, 'attended')} className="px-4 py-2 bg-emerald-500 text-white rounded-xl text-sm font-bold hover:bg-emerald-600">Present</button>
+                <button onClick={() => handleAttendance(s.id, 'absent')} className="px-4 py-2 bg-slate-100 text-slate-600 rounded-xl text-sm font-medium hover:bg-red-50 hover:text-red-600">Absent</button>
+                <button onClick={() => handleStart(s)} className="px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 flex items-center gap-1"><Play size={14} /> Start</button>
+              </div>
+            </div>
+          </div>
+        ))}
+        {done.length > 0 && <>
+          <div className="text-sm font-semibold text-slate-400 uppercase tracking-wider pt-4">Completed</div>
+          {done.map(s => (
+            <div key={s.id} className="bg-slate-50 border rounded-2xl p-4 opacity-75">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3"><div className="w-10 h-10 rounded-lg bg-slate-200 text-slate-500 flex items-center justify-center font-bold">{(s.client_name||'?')[0]}</div><span className="font-semibold text-slate-600">{s.client_name}</span></div>
+                <StatusBadge status={s.status} />
               </div>
             </div>
           ))}
-          {coaches.length === 0 && (
-            <div className="col-span-3 text-center py-12 text-slate-500">
-              <UserPlus size={48} className="mx-auto mb-4 opacity-50" />
-              <button onClick={() => setIsRegisterModalOpen(true)} className="text-purple-600 hover:underline">Register your first coach</button>
-            </div>
-          )}
-        </div>
-      )}
-
-      <CoachRegistrationModal isOpen={isRegisterModalOpen} onClose={() => setIsRegisterModalOpen(false)} onSuccess={loadCoaches} />
+        </>}
+      </div>}
     </div>
   );
 };
 
-const PaymentsView = ({ clients }) => {
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold">Payments</h2>
-        <button onClick={() => setIsModalOpen(true)} className="bg-gradient-to-r from-green-500 to-emerald-500 text-white px-6 py-3 rounded-xl font-medium flex items-center gap-2">
-          <CreditCard size={20} />Create Payment Link
-        </button>
-      </div>
-      <div className="grid md:grid-cols-3 gap-6">
-        <StatCard icon={DollarSign} label="Total Revenue" value="₹48.5K" color="green" />
-        <StatCard icon={CheckCircle} label="Paid" value="12" color="blue" />
-        <StatCard icon={Clock} label="Pending" value="3" color="orange" />
-      </div>
-      <CreatePaymentLinkModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} clients={clients} />
-    </div>
-  );
-};
+// === ACTIVE SESSION (Workout checklist) ===
+const ActiveSessionView = ({ session, onComplete, onBack }) => {
+  const [exercises, setExercises] = useState([]);
+  const [notes, setNotes] = useState('');
+  const [completing, setCompleting] = useState(false);
 
-const ReferralsView = () => {
-  const [referrals, setReferrals] = useState([]);
-  useEffect(() => { api.getReferrals().then(r => r.success && setReferrals(r.referrals)); }, []);
-  return (
-    <div className="space-y-6">
-      <h2 className="text-2xl font-bold">Referral Program</h2>
-      <div className="grid md:grid-cols-3 gap-6">
-        <StatCard icon={Share2} label="Total" value={referrals.length} color="purple" />
-        <StatCard icon={CheckCircle} label="Converted" value={referrals.filter(r => r.status === 'converted').length} color="green" />
-        <StatCard icon={Clock} label="Pending" value={referrals.filter(r => r.status === 'pending').length} color="orange" />
-      </div>
-    </div>
-  );
-};
-
-// ============================================================================
-// MAIN APP
-// ============================================================================
-
-
-// ============================================================================
-// MANAGE SESSIONS VIEW - Simple & Stable
-// ============================================================================
-const ManageSessionsView = () => {
-  const [sessions, setSessions] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [cancelModalOpen, setCancelModalOpen] = useState(false);
-  const [selectedSession, setSelectedSession] = useState(null);
-  const [cancelReason, setCancelReason] = useState('');
-
-  // Load sessions once on mount
   useEffect(() => {
-    loadSessions();
-  }, []);
-
-  const loadSessions = async () => {
-    setLoading(true);
-    try {
-      const result = await api.getSessions();
-      if (result.success) {
-        setSessions(result.sessions || []);
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
+    let exList = [];
+    const structure = session.workout?.structure || session.workout_structure;
+    if (structure) {
+      const s = typeof structure === 'string' ? JSON.parse(structure) : structure;
+      if (Array.isArray(s.exercises)) exList = s.exercises.map((e, i) => ({ ...e, id: i, done: false }));
+      else if (s.equipment) exList = (Array.isArray(s.equipment) ? s.equipment : []).map((e, i) => ({ name: e, id: i, done: false }));
     }
-  };
+    if (!exList.length) exList = [{ id: 0, name: 'Warm-up', done: false }, { id: 1, name: 'Main workout', done: false }, { id: 2, name: 'Cool-down', done: false }];
+    setExercises(exList);
+  }, [session]);
 
-  const handleCancelSession = async () => {
-    if (!cancelReason.trim()) {
-      alert('Please provide a reason');
-      return;
-    }
+  const toggle = (id) => setExercises(prev => prev.map(e => e.id === id ? { ...e, done: !e.done } : e));
+  const doneCount = exercises.filter(e => e.done).length;
 
-    try {
-      const result = await api.cancelSession(selectedSession.id, cancelReason, 'coach');
-      if (result.success) {
-        alert('✅ Session cancelled!');
-        setCancelModalOpen(false);
-        setSelectedSession(null);
-        setCancelReason('');
-        loadSessions();
-      }
-    } catch (err) {
-      alert('Failed to cancel session');
-    }
-  };
-
-  const handleMarkAttendance = async (sessionId, status) => {
-    try {
-      const result = await api.markAttendance(sessionId, status);
-      if (result.success) {
-        alert(`✅ Marked as ${status}!`);
-        loadSessions();
-      }
-    } catch (err) {
-      alert('Failed to mark attendance');
-    }
-  };
+  const handleComplete = async () => { setCompleting(true); await onComplete(session.id, notes, exercises.filter(e => e.done).map(e => e.name)); setCompleting(false); };
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold">📋 Manage Sessions</h2>
-        <button onClick={loadSessions} className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200">
-          🔄 Refresh
-        </button>
+      <button onClick={onBack} className="flex items-center gap-2 text-slate-500 hover:text-slate-700 font-medium"><ArrowLeft size={18} /> Back to Today</button>
+      <div className="bg-gradient-to-r from-blue-600 to-indigo-700 rounded-2xl p-6 text-white">
+        <div className="flex items-center justify-between">
+          <div><div className="text-sm opacity-80">Session in progress</div><h2 className="text-2xl font-bold mt-1">{session.client_name}</h2><p className="opacity-80">{session.workout_name || 'General Session'}</p></div>
+          <div className="text-right"><div className="text-4xl font-bold">{doneCount}/{exercises.length}</div><div className="text-sm opacity-80">exercises</div></div>
+        </div>
+        <div className="mt-4 bg-white/20 rounded-full h-3"><div className="bg-white rounded-full h-3 transition-all" style={{ width: `${exercises.length ? (doneCount / exercises.length * 100) : 0}%` }} /></div>
       </div>
-
-      {loading ? (
-        <div className="text-center py-12">
-          <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+      <div className="bg-white rounded-2xl border overflow-hidden">
+        <div className="px-6 py-4 border-b flex items-center justify-between"><h3 className="font-bold text-lg">Workout Checklist</h3><button onClick={() => setExercises(prev => prev.map(e => ({...e, done: true})))} className="text-sm text-blue-600 font-medium">Mark all done</button></div>
+        <div className="divide-y">
+          {exercises.map(ex => (
+            <button key={ex.id} onClick={() => toggle(ex.id)} className={`w-full flex items-center gap-4 px-6 py-4 text-left hover:bg-slate-50 ${ex.done ? 'bg-emerald-50' : ''}`}>
+              <div className={`w-8 h-8 rounded-lg border-2 flex items-center justify-center ${ex.done ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-slate-300'}`}>{ex.done && <Check size={18} />}</div>
+              <span className={`font-medium flex-1 ${ex.done ? 'text-emerald-700 line-through' : ''}`}>{ex.name}</span>
+              {ex.sets && <span className="text-sm text-slate-400">{ex.sets}x{ex.reps}</span>}
+            </button>
+          ))}
         </div>
-      ) : sessions.length === 0 ? (
-        <div className="text-center py-12 bg-white rounded-2xl border">
-          <Calendar size={48} className="mx-auto mb-4 text-slate-400" />
-          <p className="text-slate-600">No sessions found</p>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {sessions.map(session => {
-            const sessionTime = new Date(session.scheduled_at);
-            const isPast = sessionTime < new Date();
-            const isToday = sessionTime.toDateString() === new Date().toDateString();
-            const canMarkAttendance = (isPast || isToday) && session.status === 'scheduled';
-            const canCancel = session.status === 'scheduled';
-
-            return (
-              <div key={session.id} className="bg-white rounded-2xl border-2 p-4 hover:shadow-lg transition-all">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-3 mb-2">
-                      <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center text-white font-bold">
-                        {session.client_name?.charAt(0) || 'C'}
-                      </div>
-                      <div>
-                        <h3 className="font-bold text-lg">{session.client_name || 'Client'}</h3>
-                        <p className="text-sm text-slate-600">
-                          {sessionTime.toLocaleDateString()} • {sessionTime.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit'})}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col gap-2 ml-4">
-                    <span className={`px-3 py-1 rounded-full text-xs font-bold ${
-                      session.status === 'completed' ? 'bg-green-100 text-green-700' :
-                      session.status === 'cancelled' ? 'bg-red-100 text-red-700' :
-                      isToday ? 'bg-green-100 text-green-700' :
-                      'bg-blue-100 text-blue-700'
-                    }`}>
-                      {session.status === 'scheduled' && isToday ? '🟢 TODAY' : session.status.toUpperCase()}
-                    </span>
-
-                    {canMarkAttendance && (
-                      <div className="flex flex-col gap-1">
-                        <button onClick={() => handleMarkAttendance(session.id, 'attended')}
-                          className="px-3 py-1.5 bg-green-500 text-white rounded-lg text-sm font-medium hover:bg-green-600">
-                          ✓ Attended
-                        </button>
-                        <button onClick={() => handleMarkAttendance(session.id, 'absent')}
-                          className="px-3 py-1.5 bg-red-100 text-red-700 rounded-lg text-sm font-medium hover:bg-red-200">
-                          ✗ Absent
-                        </button>
-                      </div>
-                    )}
-
-                    {canCancel && (
-                      <button onClick={() => { setSelectedSession(session); setCancelModalOpen(true); }}
-                        className="px-3 py-1.5 bg-orange-100 text-orange-700 rounded-lg text-sm font-medium hover:bg-orange-200">
-                        ❌ Cancel
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Cancel Modal */}
-      {cancelModalOpen && selectedSession && (
-        <Modal isOpen={cancelModalOpen} onClose={() => { setCancelModalOpen(false); setSelectedSession(null); }} title="Cancel Session" size="md">
-          <div className="space-y-4">
-            <div className="p-4 bg-slate-50 rounded-xl">
-              <div className="font-semibold">{selectedSession.client_name}</div>
-              <div className="text-sm text-slate-600">
-                {new Date(selectedSession.scheduled_at).toLocaleString()}
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-2">Reason for Cancellation *</label>
-              <textarea value={cancelReason} onChange={(e) => setCancelReason(e.target.value)}
-                className="w-full px-4 py-3 rounded-xl border outline-none" rows={3}
-                placeholder="e.g., Client requested reschedule, Coach unavailable..." />
-            </div>
-
-            <div className="flex gap-3">
-              <button onClick={() => { setCancelModalOpen(false); setSelectedSession(null); }}
-                className="flex-1 px-4 py-3 rounded-xl border">
-                Keep Session
-              </button>
-              <button onClick={handleCancelSession}
-                className="flex-1 px-4 py-3 rounded-xl bg-red-500 text-white font-medium hover:bg-red-600">
-                ❌ Cancel Session
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
+      </div>
+      <div className="bg-white rounded-2xl border p-6"><h3 className="font-bold mb-3">Session Notes</h3><textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} className="w-full px-4 py-3 rounded-xl border outline-none resize-none" placeholder="How did the session go?" /></div>
+      <button onClick={handleComplete} disabled={completing} className="w-full py-4 bg-emerald-500 text-white rounded-2xl font-bold text-lg hover:bg-emerald-600 disabled:opacity-50 flex items-center justify-center gap-2">
+        {completing ? 'Completing...' : <><CheckCircle size={22} /> Complete Session ({doneCount}/{exercises.length})</>}
+      </button>
     </div>
   );
 };
 
-function App() {
-  const [activeTab, setActiveTab] = useState('dashboard');
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+// === CLIENTS VIEW ===
+const ClientsView = ({ showToast }) => {
   const [clients, setClients] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [search, setSearch] = useState('');
+  const [selected, setSelected] = useState(null);
+
+  const load = async () => { setLoading(true); try { const r = await api.getClients(); if (r.success) setClients(r.clients||[]); } finally { setLoading(false); } };
+  useEffect(() => { load(); }, []);
+  const filtered = clients.filter(c => (c.name||'').toLowerCase().includes(search.toLowerCase()) || (c.email||'').toLowerCase().includes(search.toLowerCase()) || (c.phone||'').includes(search));
+
+  const handleAdd = async (d) => { try { await api.createClient(d); showToast('Client added!'); setShowAdd(false); load(); } catch (e) { showToast(e.message, 'error'); } };
+  const handleImport = async (d) => { try { const r = await api.bulkImportClients({ clients: d }); showToast(r.message); setShowImport(false); load(); } catch (e) { showToast(e.message, 'error'); } };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <h1 className="text-2xl font-bold">Clients</h1>
+        <div className="flex gap-2">
+          <button onClick={() => setShowImport(true)} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-sm font-medium"><Upload size={16} /> Import CSV</button>
+          <button onClick={() => setShowAdd(true)} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700 text-sm font-medium"><Plus size={16} /> Add Client</button>
+        </div>
+      </div>
+      <div className="relative"><Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" /><input value={search} onChange={e => setSearch(e.target.value)} className="w-full pl-11 pr-4 py-3 rounded-xl border outline-none" placeholder="Search by name, email, or phone..." /></div>
+
+      {loading ? <div className="text-center py-12"><div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto" /></div> :
+       filtered.length === 0 ? <EmptyState icon={Users} title="No clients" subtitle="Add your first client or import from CSV" /> :
+      <div className="bg-white rounded-2xl border overflow-hidden">
+        <table className="w-full"><thead className="bg-slate-50"><tr><th className="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Name</th><th className="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Contact</th><th className="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Joined</th></tr></thead>
+        <tbody className="divide-y">{filtered.map(c => (
+          <tr key={c.id} className="hover:bg-slate-50 cursor-pointer" onClick={() => setSelected(c)}>
+            <td className="px-6 py-4"><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center font-bold">{(c.name||'?')[0]}</div><span className="font-semibold">{c.name}</span></div></td>
+            <td className="px-6 py-4 text-sm text-slate-500">{c.phone || c.email || '-'}</td>
+            <td className="px-6 py-4 text-sm text-slate-400">{c.created_at ? new Date(c.created_at).toLocaleDateString() : '-'}</td>
+          </tr>
+        ))}</tbody></table>
+      </div>}
+
+      <Modal isOpen={showAdd} onClose={() => setShowAdd(false)} title="Add Client" size="sm">
+        {(() => { const F = () => { const [f,sF]=useState({name:'',email:'',phone:''}); const [l,sL]=useState(false); return (
+          <form onSubmit={async e => { e.preventDefault(); sL(true); await handleAdd(f); sL(false); }} className="space-y-4">
+            <div><label className="block text-sm font-medium mb-1">Name *</label><input required value={f.name} onChange={e=>sF({...f,name:e.target.value})} className="w-full px-4 py-3 rounded-xl border outline-none" /></div>
+            <div className="grid grid-cols-2 gap-3"><div><label className="block text-sm font-medium mb-1">Email</label><input type="email" value={f.email} onChange={e=>sF({...f,email:e.target.value})} className="w-full px-4 py-3 rounded-xl border outline-none" /></div><div><label className="block text-sm font-medium mb-1">Phone</label><input type="tel" value={f.phone} onChange={e=>sF({...f,phone:e.target.value})} className="w-full px-4 py-3 rounded-xl border outline-none" placeholder="+91..." /></div></div>
+            <button type="submit" disabled={l} className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold disabled:opacity-50">{l?'Adding...':'Add Client'}</button>
+          </form>); }; return <F />; })()}
+      </Modal>
+      <Modal isOpen={showImport} onClose={() => setShowImport(false)} title="Import Clients" size="md"><BulkImportForm type="clients" onSubmit={handleImport} columns={['name','email','phone','age','gender','goal']} sampleRow="John Doe,john@email.com,+919876543210,28,male,weight loss" /></Modal>
+      {selected && <Modal isOpen={!!selected} onClose={() => setSelected(null)} title={selected.name} size="md">
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4 text-sm">
+            {selected.email && <div className="bg-slate-50 rounded-xl p-3"><div className="text-slate-400 text-xs">Email</div><div className="font-medium">{selected.email}</div></div>}
+            {selected.phone && <div className="bg-slate-50 rounded-xl p-3"><div className="text-slate-400 text-xs">Phone</div><div className="font-medium">{selected.phone}</div></div>}
+          </div>
+        </div>
+      </Modal>}
+    </div>
+  );
+};
+
+// === WORKOUTS VIEW ===
+const WorkoutsView = ({ showToast }) => {
+  const [workouts, setWorkouts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [filter, setFilter] = useState('all');
+
+  const load = async () => { setLoading(true); try { const r = await api.getWorkouts(filter === 'all' ? null : filter); if (r.success) setWorkouts(r.workouts||[]); } finally { setLoading(false); } };
+  useEffect(() => { load(); }, [filter]);
+
+  const handleAdd = async (d) => { try { await api.createWorkout(d); showToast('Workout added!'); setShowAdd(false); load(); } catch (e) { showToast(e.message, 'error'); } };
+  const handleImport = async (d) => { try { const r = await api.bulkImportWorkouts({ workouts: d }); showToast(r.message); setShowImport(false); load(); } catch (e) { showToast(e.message, 'error'); } };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <h1 className="text-2xl font-bold">Workout Library</h1>
+        <div className="flex gap-2">
+          <button onClick={() => setShowImport(true)} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-sm font-medium"><Upload size={16} /> Import CSV</button>
+          <button onClick={() => setShowAdd(true)} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700 text-sm font-medium"><Plus size={16} /> Add Workout</button>
+        </div>
+      </div>
+      <div className="flex gap-2 overflow-x-auto pb-1">{['all','strength','cardio','hiit','yoga','pilates','gym'].map(c => <button key={c} onClick={() => setFilter(c)} className={`px-4 py-2 rounded-xl text-sm font-medium whitespace-nowrap ${filter===c?'bg-blue-600 text-white':'bg-white border hover:bg-slate-50'}`}>{c.charAt(0).toUpperCase()+c.slice(1)}</button>)}</div>
+
+      {loading ? <div className="text-center py-12"><div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto" /></div> :
+       workouts.length === 0 ? <EmptyState icon={Dumbbell} title="No workouts" subtitle="Add or import workouts" /> :
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">{workouts.map(w => (
+        <div key={w.id} className="bg-white rounded-2xl border p-5 hover:shadow-md transition-all">
+          <div className="flex items-start justify-between mb-3"><span className="px-3 py-1 rounded-full text-xs font-bold bg-indigo-100 text-indigo-700">{w.category}</span>{w.duration_minutes && <span className="text-xs text-slate-400">{w.duration_minutes}min</span>}</div>
+          <h3 className="font-bold text-lg mb-1">{w.name}</h3><p className="text-sm text-slate-500 line-clamp-2">{w.description || 'No description'}</p>
+        </div>
+      ))}</div>}
+
+      <Modal isOpen={showAdd} onClose={() => setShowAdd(false)} title="Add Workout" size="sm">
+        {(() => { const F = () => { const [f,sF]=useState({name:'',description:'',category:'strength',duration_minutes:30}); const [l,sL]=useState(false); return (
+          <form onSubmit={async e => { e.preventDefault(); sL(true); await handleAdd(f); sL(false); }} className="space-y-4">
+            <div><label className="block text-sm font-medium mb-1">Name *</label><input required value={f.name} onChange={e=>sF({...f,name:e.target.value})} className="w-full px-4 py-3 rounded-xl border outline-none" /></div>
+            <div><label className="block text-sm font-medium mb-1">Description</label><textarea value={f.description} onChange={e=>sF({...f,description:e.target.value})} className="w-full px-4 py-3 rounded-xl border outline-none" rows={2} /></div>
+            <div className="grid grid-cols-2 gap-3"><div><label className="block text-sm font-medium mb-1">Category</label><select value={f.category} onChange={e=>sF({...f,category:e.target.value})} className="w-full px-4 py-3 rounded-xl border outline-none">{['strength','cardio','hiit','yoga','pilates','gym'].map(c=><option key={c} value={c}>{c}</option>)}</select></div><div><label className="block text-sm font-medium mb-1">Duration (min)</label><input type="number" value={f.duration_minutes} onChange={e=>sF({...f,duration_minutes:parseInt(e.target.value)||30})} className="w-full px-4 py-3 rounded-xl border outline-none" /></div></div>
+            <button type="submit" disabled={l} className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold disabled:opacity-50">{l?'Adding...':'Add Workout'}</button>
+          </form>); }; return <F />; })()}
+      </Modal>
+      <Modal isOpen={showImport} onClose={() => setShowImport(false)} title="Import Workouts" size="md"><BulkImportForm type="workouts" onSubmit={handleImport} columns={['name','description','category','duration_minutes']} sampleRow="Bench Press,Flat barbell press,strength,15" /></Modal>
+    </div>
+  );
+};
+
+// === SCHEDULE PLANNER ===
+const ScheduleView = ({ showToast }) => {
+  const [clients, setClients] = useState([]);
+  const [workouts, setWorkouts] = useState([]);
   const [sessions, setSessions] = useState([]);
-  const [stats, setStats] = useState(null);
+  const [showPlan, setShowPlan] = useState(false);
+  const [showBulk, setShowBulk] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  const loadData = async () => {
-    setLoading(true);
+  const load = async () => { setLoading(true); const [c,w,s] = await Promise.all([api.getClients(),api.getWorkouts(),api.getSessions()]); if(c.success) setClients(c.clients||[]); if(w.success) setWorkouts(w.workouts||[]); if(s.success) setSessions(s.sessions||[]); setLoading(false); };
+  useEffect(() => { load(); }, []);
+
+  const grouped = {}; sessions.forEach(s => { const d = new Date(s.scheduled_at).toLocaleDateString('en-IN',{weekday:'short',month:'short',day:'numeric'}); if(!grouped[d]) grouped[d]=[]; grouped[d].push(s); });
+
+  const handlePlan = async (d) => {
     try {
-      const [c, s, st] = await Promise.all([api.getClients(), api.getSessions(), api.getDashboardStats()]);
-      if (c.success) setClients(c.clients);
-      if (s.success) setSessions(s.sessions);
-      if (st.success) setStats(st.stats);
-    } finally {
-      setLoading(false);
-    }
+      if (d.recurrence_type && d.recurrence_type !== 'once') { const [dt,tm] = d.scheduled_at.split('T'); await api.createRecurringSessions({client_id:d.client_id,recurrence_type:d.recurrence_type,start_date:dt,time:tm||'09:00',num_sessions:d.num_sessions||4,duration_minutes:d.duration_minutes,location:d.location}); }
+      else { await api.createSession(d); }
+      showToast('Session(s) scheduled!'); setShowPlan(false); load();
+    } catch (e) { showToast(e.message, 'error'); }
   };
-
-  useEffect(() => { loadData(); }, []);
-
-  const renderContent = () => {
-    if (loading) return <div className="flex items-center justify-center h-64"><div className="w-16 h-16 border-4 border-orange-500 border-t-transparent rounded-full animate-spin"></div></div>;
-    switch (activeTab) {
-      case 'dashboard': return <Dashboard clients={clients} sessions={sessions} stats={stats} />;
-      case 'clients': return <ClientsView clients={clients} onRefresh={loadData} />;
-      case 'sessions': return <SessionsView sessions={sessions} clients={clients} onRefresh={loadData} />;
-      case 'manage-sessions': return <ManageSessionsView />;
-      case 'workouts': return <WorkoutsView />;
-      case 'coaches': return <CoachesView />;
-      case 'payments': return <PaymentsView clients={clients} />;
-      case 'referrals': return <ReferralsView />;
-      default: return <Dashboard clients={clients} sessions={sessions} stats={stats} />;
-    }
-  };
+  const handleBulk = async (rows) => { try { const r = await api.bulkPlanSessions({sessions:rows}); showToast(r.message); setShowBulk(false); load(); } catch (e) { showToast(e.message, 'error'); } };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 flex">
-      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} isMobileMenuOpen={isMobileMenuOpen} setIsMobileMenuOpen={setIsMobileMenuOpen} />
-      <div className="flex-1 flex flex-col min-w-0">
-        <Header setIsMobileMenuOpen={setIsMobileMenuOpen} />
-        <main className="flex-1 p-6 overflow-auto"><div className="max-w-7xl mx-auto">{renderContent()}</div></main>
+    <div className="space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <h1 className="text-2xl font-bold">Schedule Planner</h1>
+        <div className="flex gap-2">
+          <button onClick={() => setShowBulk(true)} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-sm font-medium"><Zap size={16} /> Bulk Plan</button>
+          <button onClick={() => setShowPlan(true)} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700 text-sm font-medium"><Plus size={16} /> Schedule</button>
+        </div>
       </div>
+
+      {loading ? <div className="text-center py-12"><div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto" /></div> :
+       sessions.length === 0 ? <EmptyState icon={Calendar} title="No sessions" subtitle="Start scheduling" /> :
+      <div className="space-y-6">{Object.entries(grouped).map(([date, ds]) => (
+        <div key={date}><h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3">{date}</h3>
+          <div className="space-y-2">{ds.map(s => (
+            <div key={s.id} className="bg-white border rounded-xl p-4 flex items-center justify-between hover:shadow-sm">
+              <div className="flex items-center gap-3"><div className="w-10 h-10 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center font-bold">{(s.client_name||'?')[0]}</div><div><span className="font-semibold">{s.client_name}</span><span className="text-sm text-slate-400 ml-2">{new Date(s.scheduled_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span>{s.template_name&&<span className="text-sm text-indigo-500 ml-2">{s.template_name}</span>}</div></div>
+              <StatusBadge status={s.status} />
+            </div>
+          ))}</div>
+        </div>
+      ))}</div>}
+
+      <Modal isOpen={showPlan} onClose={() => setShowPlan(false)} title="Schedule Session" size="md">
+        {(() => { const F = () => { const [f,sF]=useState({client_id:'',scheduled_at:'',duration_minutes:60,location:'offline',workout_id:'',recurrence_type:'once',num_sessions:4}); const [l,sL]=useState(false); return (
+          <form onSubmit={async e => { e.preventDefault(); sL(true); await handlePlan(f); sL(false); }} className="space-y-4">
+            <div><label className="block text-sm font-medium mb-1">Client *</label><select required value={f.client_id} onChange={e=>sF({...f,client_id:e.target.value})} className="w-full px-4 py-3 rounded-xl border outline-none"><option value="">Select...</option>{clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+            <div><label className="block text-sm font-medium mb-1">Workout</label><select value={f.workout_id} onChange={e=>sF({...f,workout_id:e.target.value})} className="w-full px-4 py-3 rounded-xl border outline-none"><option value="">None</option>{workouts.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}</select></div>
+            <div className="grid grid-cols-2 gap-3"><div><label className="block text-sm font-medium mb-1">Date & Time *</label><input required type="datetime-local" value={f.scheduled_at} onChange={e=>sF({...f,scheduled_at:e.target.value})} className="w-full px-4 py-3 rounded-xl border outline-none" /></div><div><label className="block text-sm font-medium mb-1">Duration</label><input type="number" value={f.duration_minutes} onChange={e=>sF({...f,duration_minutes:parseInt(e.target.value)||60})} className="w-full px-4 py-3 rounded-xl border outline-none" /></div></div>
+            <div className="grid grid-cols-2 gap-3"><div><label className="block text-sm font-medium mb-1">Recurrence</label><select value={f.recurrence_type} onChange={e=>sF({...f,recurrence_type:e.target.value})} className="w-full px-4 py-3 rounded-xl border outline-none"><option value="once">One-time</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="biweekly">Bi-weekly</option><option value="monthly">Monthly</option></select></div>{f.recurrence_type!=='once'&&<div><label className="block text-sm font-medium mb-1"># Sessions</label><input type="number" min="1" max="52" value={f.num_sessions} onChange={e=>sF({...f,num_sessions:parseInt(e.target.value)||4})} className="w-full px-4 py-3 rounded-xl border outline-none" /></div>}</div>
+            <button type="submit" disabled={l} className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold disabled:opacity-50">{l?'Scheduling...':'Schedule'}</button>
+          </form>); }; return <F />; })()}
+      </Modal>
+
+      <Modal isOpen={showBulk} onClose={() => setShowBulk(false)} title="Bulk Plan Sessions" size="lg">
+        {(() => { const F = () => { const [rows,sR]=useState([{client_id:'',scheduled_at:'',workout_id:'',duration_minutes:60}]); const [l,sL]=useState(false);
+          const add=()=>sR([...rows,{client_id:'',scheduled_at:'',workout_id:'',duration_minutes:60}]);
+          const upd=(i,k,v)=>{const n=[...rows];n[i][k]=v;sR(n);};
+          const rm=(i)=>sR(rows.filter((_,idx)=>idx!==i));
+          return (<div className="space-y-4"><p className="text-sm text-slate-500">Plan multiple sessions at once.</p>
+            <div className="space-y-3 max-h-80 overflow-y-auto">{rows.map((r,i) => (
+              <div key={i} className="grid grid-cols-12 gap-2 items-end">
+                <div className="col-span-4">{i===0&&<label className="block text-xs font-medium mb-1">Client</label>}<select value={r.client_id} onChange={e=>upd(i,'client_id',e.target.value)} className="w-full px-3 py-2 rounded-lg border outline-none text-sm"><option value="">Select...</option>{clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+                <div className="col-span-3">{i===0&&<label className="block text-xs font-medium mb-1">Date & Time</label>}<input type="datetime-local" value={r.scheduled_at} onChange={e=>upd(i,'scheduled_at',e.target.value)} className="w-full px-3 py-2 rounded-lg border outline-none text-sm" /></div>
+                <div className="col-span-3">{i===0&&<label className="block text-xs font-medium mb-1">Workout</label>}<select value={r.workout_id} onChange={e=>upd(i,'workout_id',e.target.value)} className="w-full px-3 py-2 rounded-lg border outline-none text-sm"><option value="">None</option>{workouts.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}</select></div>
+                <div className="col-span-1">{i===0&&<label className="block text-xs font-medium mb-1">Min</label>}<input type="number" value={r.duration_minutes} onChange={e=>upd(i,'duration_minutes',parseInt(e.target.value)||60)} className="w-full px-2 py-2 rounded-lg border outline-none text-sm" /></div>
+                <div className="col-span-1">{rows.length>1&&<button onClick={()=>rm(i)} className="p-2 text-red-400 hover:text-red-600"><X size={16}/></button>}</div>
+              </div>))}</div>
+            <button onClick={add} className="w-full py-2 border-2 border-dashed rounded-xl text-sm font-medium text-slate-500 hover:bg-slate-50">+ Add row</button>
+            <button onClick={async()=>{const v=rows.filter(r=>r.client_id&&r.scheduled_at); if(!v.length) return; sL(true); await handleBulk(v); sL(false);}} disabled={l} className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold disabled:opacity-50">{l?'Planning...':`Plan ${rows.filter(r=>r.client_id&&r.scheduled_at).length} Session(s)`}</button>
+          </div>); }; return <F />; })()}
+      </Modal>
+    </div>
+  );
+};
+
+// === PROGRESS VIEW ===
+const ProgressView = ({ showToast }) => {
+  const [clients, setClients] = useState([]);
+  const [sel, setSel] = useState('');
+  const [weight, setWeight] = useState('');
+  const [notes, setNotes] = useState('');
+  const [loading, setLoading] = useState(false);
+  useEffect(() => { api.getClients().then(r => r.success && setClients(r.clients||[])); }, []);
+  const handle = async () => { if (!sel) { showToast('Select client', 'error'); return; } setLoading(true); try { await api.uploadProgress({ client_id: sel, type: 'measurement', weight: weight ? parseFloat(weight) : null, notes, measurements: {}, photos: [] }); showToast('Progress recorded!'); setWeight(''); setNotes(''); } catch (e) { showToast(e.message, 'error'); } setLoading(false); };
+  return (
+    <div className="space-y-6"><h1 className="text-2xl font-bold">Client Progress</h1>
+      <div className="bg-white rounded-2xl border p-6 space-y-4"><h3 className="font-bold text-lg">Record Progress</h3>
+        <div><label className="block text-sm font-medium mb-1">Client *</label><select value={sel} onChange={e=>setSel(e.target.value)} className="w-full px-4 py-3 rounded-xl border outline-none"><option value="">Select...</option>{clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+        <div className="grid grid-cols-2 gap-4"><div><label className="block text-sm font-medium mb-1">Weight (kg)</label><input type="number" step="0.1" value={weight} onChange={e=>setWeight(e.target.value)} className="w-full px-4 py-3 rounded-xl border outline-none" placeholder="72.5" /></div><div><label className="block text-sm font-medium mb-1">Notes</label><input value={notes} onChange={e=>setNotes(e.target.value)} className="w-full px-4 py-3 rounded-xl border outline-none" placeholder="Progress notes..." /></div></div>
+        <div className="bg-slate-50 border-2 border-dashed rounded-xl p-8 text-center"><Camera size={32} className="mx-auto text-slate-400 mb-2" /><p className="text-sm text-slate-500">Photo upload coming soon</p></div>
+        <button onClick={handle} disabled={loading||!sel} className="w-full py-3 bg-emerald-600 text-white rounded-xl font-bold disabled:opacity-50">{loading?'Saving...':'Save Progress'}</button>
+      </div>
+    </div>
+  );
+};
+
+// === DASHBOARD ===
+const DashboardView = () => {
+  const [stats, setStats] = useState(null);
+  const [sessions, setSessions] = useState([]);
+  useEffect(() => { api.getDashboardStats().then(r=>r.success&&setStats(r.stats)); api.getSessions().then(r=>r.success&&setSessions((r.sessions||[]).slice(0,8))); }, []);
+  return (
+    <div className="space-y-6"><h1 className="text-2xl font-bold">Dashboard</h1>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="bg-white rounded-2xl border p-5"><div className="text-3xl font-bold">{stats?.total_clients||0}</div><div className="text-sm text-slate-500 mt-1">Clients</div></div>
+        <div className="bg-white rounded-2xl border p-5"><div className="text-3xl font-bold text-blue-600">{stats?.total_sessions||0}</div><div className="text-sm text-slate-500 mt-1">Sessions</div></div>
+        <div className="bg-white rounded-2xl border p-5"><div className="text-3xl font-bold text-emerald-600">{stats?.completed_sessions||0}</div><div className="text-sm text-slate-500 mt-1">Completed</div></div>
+        <div className="bg-white rounded-2xl border p-5"><div className="text-3xl font-bold text-indigo-600">{stats?.total_workouts||0}</div><div className="text-sm text-slate-500 mt-1">Workouts</div></div>
+      </div>
+      <div className="bg-white rounded-2xl border p-6"><h2 className="font-bold text-lg mb-4">Recent Sessions</h2>
+        <div className="space-y-2">{sessions.map(s=>(
+          <div key={s.id} className="flex items-center justify-between p-3 rounded-xl hover:bg-slate-50"><div className="flex items-center gap-3"><div className="w-9 h-9 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-sm">{(s.client_name||'?')[0]}</div><div><span className="font-medium text-sm">{s.client_name}</span><span className="text-xs text-slate-400 ml-2">{new Date(s.scheduled_at).toLocaleDateString()}</span></div></div><StatusBadge status={s.status} /></div>
+        ))}{sessions.length===0&&<p className="text-slate-400 text-sm text-center py-4">No sessions yet</p>}</div>
+      </div>
+    </div>
+  );
+};
+
+// === MAIN APP ===
+const navItems = [
+  { id: 'today', icon: Zap, label: 'Today' },
+  { id: 'clients', icon: Users, label: 'Clients' },
+  { id: 'workouts', icon: Dumbbell, label: 'Workouts' },
+  { id: 'schedule', icon: Calendar, label: 'Planner' },
+  { id: 'progress', icon: TrendingUp, label: 'Progress' },
+  { id: 'dashboard', icon: BarChart3, label: 'Dashboard' },
+];
+
+function App() {
+  const [tab, setTab] = useState('today');
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [toast, setToast] = useState(null);
+  const showToast = (msg, type = 'success') => setToast({ message: msg, type });
+
+  return (
+    <div className="min-h-screen bg-slate-50 flex">
+      {mobileOpen && <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={() => setMobileOpen(false)} />}
+      <aside className={`fixed lg:sticky top-0 left-0 h-screen w-64 bg-white border-r flex flex-col z-50 transition-transform ${mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
+        <div className="p-5 border-b"><div className="flex items-center justify-between"><div className="flex items-center gap-2"><div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold text-lg">F</div><span className="font-bold text-lg">FitLife Coach</span></div><button onClick={() => setMobileOpen(false)} className="lg:hidden"><X size={20} /></button></div></div>
+        <nav className="flex-1 p-3 space-y-1">{navItems.map(item => (
+          <button key={item.id} onClick={() => { setTab(item.id); setMobileOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${tab === item.id ? 'bg-blue-50 text-blue-700' : 'text-slate-600 hover:bg-slate-50'}`}><item.icon size={20} />{item.label}</button>
+        ))}</nav>
+      </aside>
+      <div className="flex-1 min-w-0 flex flex-col">
+        <header className="bg-white border-b px-6 py-4 flex items-center justify-between sticky top-0 z-30">
+          <button onClick={() => setMobileOpen(true)} className="lg:hidden"><Menu size={24} /></button>
+          <div className="text-sm text-slate-500 hidden lg:block">{navItems.find(n => n.id === tab)?.label}</div>
+          <div className="text-sm text-slate-400">{new Date().toLocaleDateString('en-IN', { weekday: 'short', month: 'short', day: 'numeric' })}</div>
+        </header>
+        <main className="flex-1 p-6 overflow-auto"><div className="max-w-6xl mx-auto">
+          {tab === 'today' && <TodayView onNavigate={setTab} showToast={showToast} />}
+          {tab === 'clients' && <ClientsView showToast={showToast} />}
+          {tab === 'workouts' && <WorkoutsView showToast={showToast} />}
+          {tab === 'schedule' && <ScheduleView showToast={showToast} />}
+          {tab === 'progress' && <ProgressView showToast={showToast} />}
+          {tab === 'dashboard' && <DashboardView />}
+        </div></main>
+      </div>
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+      <style>{`@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}.animate-slideIn{animation:slideIn .3s ease-out}`}</style>
     </div>
   );
 }
