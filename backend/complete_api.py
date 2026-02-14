@@ -8,6 +8,17 @@ import os
 from datetime import datetime, timedelta
 import uuid
 import hashlib
+
+def parse_dt(s):
+    """Convert a datetime string to a Python datetime object for asyncpg."""
+    if isinstance(s, datetime):
+        return s
+    for fmt in ('%Y-%m-%dT%H:%M:%S', '%Y-%m-%dT%H:%M', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%Y-%m-%d'):
+        try:
+            return datetime.strptime(s, fmt)
+        except (ValueError, TypeError):
+            continue
+    raise ValueError(f"Cannot parse datetime: {s}")
 import random
 import string
 
@@ -251,7 +262,7 @@ async def create_session(data: SessionCreate):
                (org_id, coach_id, client_id, scheduled_at, duration_minutes, status, location, notes, created_at)
                VALUES ($1, $2::uuid, $3::uuid, $4::timestamp, $5, 'scheduled', $6, $7, NOW())
                RETURNING id::text, scheduled_at::text, status""",
-            org_id, coach_id, data.client_id, data.scheduled_at,
+            org_id, coach_id, data.client_id, parse_dt(data.scheduled_at),
             data.duration_minutes, data.location_type, data.notes,
         )
         return {"success": True, "session": dict(row), "message": "Session created successfully"}
@@ -916,7 +927,7 @@ async def bulk_plan_sessions(data: dict = Body(...)):
                    VALUES ($1, $2::uuid, $3::uuid, $4, $5::timestamp, $6, 'scheduled', $7, NOW())""",
                 org_id, coach_id, s["client_id"],
                 uuid.UUID(workout_id) if workout_id else None,
-                s["scheduled_at"],
+                parse_dt(s["scheduled_at"]),
                 int(s.get("duration_minutes", 60)),
                 s.get("location", "offline"),
             )
@@ -1104,3 +1115,226 @@ async def send_reminders(data: dict = Body(...)):
         "method": method,
         "message": f"Reminders queued for {len(session_ids)} sessions via {method} (demo mode)",
     }
+
+
+# ============================================================================
+# DELETE ENDPOINTS
+# ============================================================================
+@router.delete("/clients/{client_id}")
+async def delete_client(client_id: str):
+    conn = await get_db()
+    try:
+        # Soft delete
+        row = await conn.fetchrow(
+            "UPDATE users SET deleted_at = NOW(), is_active = false WHERE id = $1::uuid AND role = 'client' RETURNING id::text",
+            client_id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Client not found")
+        return {"success": True, "message": "Client deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await conn.close()
+
+
+@router.delete("/workouts/{workout_id}")
+async def delete_workout(workout_id: str):
+    conn = await get_db()
+    try:
+        row = await conn.fetchrow(
+            "UPDATE session_templates SET deleted_at = NOW(), is_active = false WHERE id = $1::uuid RETURNING id::text",
+            workout_id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Workout not found")
+        return {"success": True, "message": "Workout deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await conn.close()
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(session_id: str):
+    conn = await get_db()
+    try:
+        row = await conn.fetchrow(
+            "DELETE FROM scheduled_sessions WHERE id = $1::uuid RETURNING id::text",
+            session_id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Session not found")
+        return {"success": True, "message": "Session deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await conn.close()
+
+
+# ============================================================================
+# RAZORPAY PAYMENT LINK
+# ============================================================================
+@router.post("/payments/create-razorpay-link")
+async def create_razorpay_link(data: dict = Body(...)):
+    """Create a Razorpay payment link. Requires RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET env vars."""
+    import httpx
+    conn = await get_db()
+    try:
+        client_id = data["client_id"]
+        amount = float(data["amount"])  # in INR
+        description = data.get("description", "Coaching session payment")
+
+        # Get client details
+        client = await conn.fetchrow(
+            "SELECT full_name, email, phone FROM users WHERE id = $1::uuid", client_id
+        )
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+
+        key_id = os.getenv("RAZORPAY_KEY_ID", "")
+        key_secret = os.getenv("RAZORPAY_KEY_SECRET", "")
+
+        if not key_id or not key_secret:
+            # Demo mode — return a mock link
+            return {
+                "success": True,
+                "payment_link": f"https://rzp.io/demo/{uuid.uuid4().hex[:8]}",
+                "amount": amount,
+                "client_name": client["full_name"],
+                "mode": "demo",
+                "message": f"Demo payment link created for ₹{amount:.0f}. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET env vars for real links.",
+            }
+
+        # Real Razorpay API call
+        payload = {
+            "amount": int(amount * 100),  # Razorpay expects paise
+            "currency": "INR",
+            "description": description,
+            "customer": {
+                "name": client["full_name"] or "",
+                "email": client["email"] or "",
+                "contact": client["phone"] or "",
+            },
+            "notify": {"sms": True, "email": True},
+            "callback_url": "",
+            "callback_method": "get",
+        }
+
+        async with httpx.AsyncClient() as http:
+            resp = await http.post(
+                "https://api.razorpay.com/v1/payment_links",
+                json=payload,
+                auth=(key_id, key_secret),
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                rz = resp.json()
+                # Store payment record
+                org_id = await ensure_org(conn)
+                await conn.execute(
+                    """INSERT INTO payments (org_id, client_id, amount, currency, status, payment_method, transaction_id, metadata, created_at)
+                       VALUES ($1, $2::uuid, $3, 'INR', 'pending', 'razorpay', $4, $5::jsonb, NOW())""",
+                    org_id, client_id, amount, rz.get("id", ""),
+                    json.dumps({"razorpay_link_id": rz.get("id"), "short_url": rz.get("short_url")}),
+                )
+                return {
+                    "success": True,
+                    "payment_link": rz.get("short_url", ""),
+                    "razorpay_link_id": rz.get("id"),
+                    "amount": amount,
+                    "client_name": client["full_name"],
+                    "mode": "live",
+                    "message": f"Payment link created for ₹{amount:.0f}",
+                }
+            else:
+                raise HTTPException(status_code=500, detail=f"Razorpay error: {resp.text}")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await conn.close()
+
+
+# ============================================================================
+# WHATSAPP / EMAIL REMINDERS
+# ============================================================================
+@router.post("/reminders/send-personal")
+async def send_personal_reminder(data: dict = Body(...)):
+    """Send reminder to a specific client via WhatsApp or Email."""
+    conn = await get_db()
+    try:
+        client_id = data["client_id"]
+        method = data.get("method", "whatsapp")  # whatsapp, email
+        message = data.get("message", "")
+        session_id = data.get("session_id")
+
+        client = await conn.fetchrow(
+            "SELECT full_name, email, phone FROM users WHERE id = $1::uuid", client_id
+        )
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+
+        session_info = ""
+        if session_id:
+            sess = await conn.fetchrow(
+                "SELECT scheduled_at::text, duration_minutes FROM scheduled_sessions WHERE id = $1::uuid", session_id
+            )
+            if sess:
+                session_info = f" on {sess['scheduled_at'][:16].replace('T', ' at ')}"
+
+        client_name = client["full_name"] or "Client"
+        default_msg = f"Hi {client_name}, this is a reminder about your upcoming coaching session{session_info}. Looking forward to seeing you!"
+
+        final_message = message or default_msg
+
+        if method == "whatsapp":
+            phone = (client["phone"] or "").replace("+", "").replace(" ", "").replace("-", "")
+            if not phone:
+                return {"success": False, "message": "Client has no phone number"}
+            # Generate WhatsApp link (wa.me deep link)
+            import urllib.parse
+            wa_link = f"https://wa.me/{phone}?text={urllib.parse.quote(final_message)}"
+            return {
+                "success": True,
+                "method": "whatsapp",
+                "link": wa_link,
+                "phone": client["phone"],
+                "message": final_message,
+                "client_name": client_name,
+                "info": "Click the link to open WhatsApp with the pre-filled message",
+            }
+        elif method == "email":
+            email = client["email"]
+            if not email:
+                return {"success": False, "message": "Client has no email address"}
+            import urllib.parse
+            subject = urllib.parse.quote(f"Session Reminder - FitLife Coaching")
+            body = urllib.parse.quote(final_message)
+            mailto_link = f"mailto:{email}?subject={subject}&body={body}"
+            return {
+                "success": True,
+                "method": "email",
+                "link": mailto_link,
+                "email": email,
+                "message": final_message,
+                "client_name": client_name,
+                "info": "Click the link to open your email client",
+            }
+        else:
+            return {"success": False, "message": f"Unknown method: {method}"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await conn.close()
