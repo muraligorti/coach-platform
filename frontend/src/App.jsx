@@ -3,7 +3,7 @@ import {
   Calendar, Users, TrendingUp, BarChart3, Bell, Menu, X,
   Plus, CheckCircle, Play, Search, Eye, Upload, Camera, ArrowLeft,
   Check, AlertCircle, Zap, Dumbbell, Trash2, Send, DollarSign,
-  MessageCircle, Mail, ExternalLink, Copy, Clock, Bot, Sparkles, Loader
+  MessageCircle, Mail, ExternalLink, Copy, Clock, Bot, Sparkles, Loader, Inbox, UserPlus
 } from 'lucide-react';
 
 const API_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL) || 'https://coach-api-1770519048.azurewebsites.net/api/v1';
@@ -17,6 +17,12 @@ const api = {
       const headers = { 'Content-Type': 'application/json', ...(coachId ? { 'X-Coach-Id': coachId } : {}), ...(opts.headers || {}) };
       const r = await fetch(`${API_URL}${ep}`, { ...opts, headers });
       const d = await r.json();
+      // Detect stale session - foreign key errors mean coach_id is invalid
+      if (!r.ok && d.detail && (d.detail.includes('foreign key') || d.detail.includes('not present in table') || d.detail === 'Valid coach ID required. Please login again.')) {
+        localStorage.removeItem('coach_user');
+        window.location.reload();
+        throw new Error('Session expired. Please login again.');
+      }
       if (!r.ok && !d.success) throw new Error(d.detail || d.message || 'Request failed');
       return d;
     } catch (e) { console.error('API:', e); throw e; }
@@ -45,6 +51,9 @@ const api = {
   getDashboardStats() { return this.request('/dashboard/stats'); },
   getClientConsistency(id) { return this.request(`/progress/consistency/${id}`); },
   uploadProgress(d) { return this.request('/progress/upload', { method: 'POST', body: JSON.stringify(d) }); },
+  getLeads(status) { return this.request(status ? `/leads?status=${status}` : '/leads'); },
+  updateLead(id, d) { return this.request(`/leads/${id}`, { method: 'PATCH', body: JSON.stringify(d) }); },
+  convertLead(id) { return this.request(`/leads/${id}/convert`, { method: 'POST' }); },
 };
 
 function parseCSV(text) {
@@ -554,176 +563,250 @@ const ProgressView = ({ showToast }) => {
 };
 
 
+
 // === AI PROMPT VIEW ===
 const PromptView = ({ showToast }) => {
-  const [messages, setMessages] = useState([{ role: 'ai', text: 'Hi Coach! I\'m your AI assistant. I remember our conversation!\n\nTry:\n• "Add client Rahul, phone 9876543210"\n• "Add workout Chest Day, 45 min, strength"\n• "Schedule Rahul for Chest Day, daily starting Monday, skip weekends"\n• "Mark Rahul as present today"\n• "Bulk add clients: Rahul 9876543210, Priya 9123456789"\n• "Send WhatsApp reminder to Rahul"\n• "Create payment link for Rahul 2000 rupees"\n• "Show my stats"' }]);
+  const WELCOME = "Hello! I'm your AI coaching assistant. I can help you manage your entire business.\n\nJust tell me what you need — I'll ask for any missing details.\n\n**Examples:**\n• \"I want to add a new client\"\n• \"Add 5 clients at once\"\n• \"Create a workout called Leg Day\"\n• \"Schedule Rahul for daily sessions\"\n• \"Mark Rahul present\"\n• \"Show my dashboard\"";
+
+  const [messages, setMessages] = useState([{ role: 'ai', text: WELCOME }]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [pendingAction, setPendingAction] = useState(null);
+  const [flow, setFlow] = useState(null);
   const [ctx, setCtx] = useState({ lastClient: null, lastWorkout: null });
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
-  const findClient = async (name) => { const r = await api.getClients(); const n = name.toLowerCase(); return (r.clients||[]).find(c => c.name.toLowerCase()===n) || (r.clients||[]).find(c => c.name.toLowerCase().includes(n)); };
-  const findWorkout = async (name) => { const r = await api.getWorkouts(); const n = name.toLowerCase(); return (r.workouts||[]).find(w => w.name.toLowerCase()===n) || (r.workouts||[]).find(w => w.name.toLowerCase().includes(n)); };
+  const findClient = async (name) => { const r=await api.getClients();const n=name.toLowerCase().trim();return(r.clients||[]).find(c=>c.name.toLowerCase()===n)||(r.clients||[]).find(c=>c.name.toLowerCase().includes(n)); };
+  const findWorkout = async (name) => { const r=await api.getWorkouts();const n=name.toLowerCase().trim();return(r.workouts||[]).find(w=>w.name.toLowerCase()===n)||(r.workouts||[]).find(w=>w.name.toLowerCase().includes(n)); };
   const parseDate = (text) => {
-    const dt = new Date(); const t = text.toLowerCase();
-    if (t.includes('tomorrow')) dt.setDate(dt.getDate()+1);
-    else if (t.match(/next\s+(mon|tue|wed|thu|fri|sat|sun)/i)) { const days=['sun','mon','tue','wed','thu','fri','sat']; const tgt=days.findIndex(d=>t.includes(d)); if(tgt>=0){while(dt.getDay()!==tgt||dt.toDateString()===new Date().toDateString())dt.setDate(dt.getDate()+1);} }
-    else { const m=text.match(/(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?/); if(m){dt.setMonth(parseInt(m[1])-1,parseInt(m[2]));if(m[3])dt.setFullYear(m[3].length===2?2000+parseInt(m[3]):parseInt(m[3]));} }
-    const tm=text.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i); if(tm){let h=parseInt(tm[1]);if(tm[3].toLowerCase()==='pm'&&h<12)h+=12;if(tm[3].toLowerCase()==='am'&&h===12)h=0;dt.setHours(h,parseInt(tm[2]||'0'),0,0);} else dt.setHours(10,0,0,0);
+    const dt=new Date();const t=text.toLowerCase();
+    if(t.includes('tomorrow'))dt.setDate(dt.getDate()+1);
+    else if(t.match(/(mon|tue|wed|thu|fri|sat|sun)/i)){const days=['sun','mon','tue','wed','thu','fri','sat'];const tgt=days.findIndex(d=>t.includes(d));if(tgt>=0){do{dt.setDate(dt.getDate()+1)}while(dt.getDay()!==tgt);}}
+    else{const m=text.match(/(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?/);if(m){dt.setDate(parseInt(m[2]));dt.setMonth(parseInt(m[1])-1);}}
+    const tm=text.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
+    if(tm){let h=parseInt(tm[1]);if(tm[3].toLowerCase()==='pm'&&h<12)h+=12;if(tm[3].toLowerCase()==='am'&&h===12)h=0;dt.setHours(h,parseInt(tm[2]||'0'),0,0);}else dt.setHours(10,0,0,0);
     return dt;
   };
+  const fmtD=(dt)=>dt.toLocaleDateString('en-IN',{weekday:'short',month:'short',day:'numeric'})+' at '+dt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
 
-  const exec = async (prompt) => {
-    const p = prompt.toLowerCase().trim();
-    // ---- PENDING ACTION RESPONSES ----
-    if (pendingAction) {
-      const act = pendingAction; setPendingAction(null);
-      if (act.type==='client_phone') { const ph=prompt.trim().replace(/[^+\d]/g,''); try { const r=await api.createClient({name:act.name,phone:ph,email:act.email}); setCtx(v=>({...v,lastClient:r.client})); return {text:`✅ **${act.name}** added! Phone: ${ph}${act.email?'\nEmail: '+act.email:''}\n\nSchedule a session? Say "schedule them tomorrow at 10am"`}; } catch(e) { return {text:`❌ ${e.message}`}; } }
-      if (act.type==='workout_dur') { const dur=parseInt(prompt)||30; try { const r=await api.createWorkout({name:act.name,category:act.category,duration_minutes:dur}); setCtx(v=>({...v,lastWorkout:r.workout})); let extra=''; if(act.clientTag){const cl=await findClient(act.clientTag);if(cl){const d=new Date();d.setDate(d.getDate()+1);d.setHours(10,0,0,0);await api.createSession({client_id:cl.id,scheduled_at:d.toISOString().slice(0,16),duration_minutes:dur,workout_id:r.workout.id});extra=`\n📌 Assigned to **${cl.name}** tomorrow at 10 AM!`;}} return {text:`✅ Workout **${act.name}** (${act.category}, ${dur}min) created!${extra}`}; } catch(e) { return {text:`❌ ${e.message}`}; } }
-      if (act.type==='sched_time') { const dt=parseDate(prompt); try { await api.createSession({client_id:act.client.id,scheduled_at:dt.toISOString().slice(0,16),duration_minutes:act.dur||60,workout_id:act.workout?.id}); setCtx(v=>({...v,lastClient:act.client})); return {text:`✅ **${act.client.name}** scheduled ${dt.toLocaleDateString('en-IN',{weekday:'short',month:'short',day:'numeric'})} at ${dt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}${act.workout?'\n🏋️ '+act.workout.name:''}`,actions:[{label:'Schedule',tab:'schedule'}]}; } catch(e) { return {text:`❌ ${e.message}`}; } }
-      if (act.type==='recur_time') { const dt=parseDate(prompt); try { const r=await api.createRecurringSessions({client_id:act.client.id,recurrence_type:act.rec,start_date:dt.toISOString().slice(0,10),time:dt.toTimeString().slice(0,5),num_sessions:act.num,duration_minutes:act.dur}); setCtx(v=>({...v,lastClient:act.client})); return {text:`✅ ${r.message}\n📅 **${act.client.name}** — ${act.rec} from ${dt.toLocaleDateString('en-IN',{weekday:'long',month:'short',day:'numeric'})} at ${dt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}`,actions:[{label:'Schedule',tab:'schedule'}]}; } catch(e) { return {text:`❌ ${e.message}`}; } }
-      if (act.type==='confirm_del') { if(p.includes('yes')||p.includes('ok')||p.includes('sure')||p.includes('confirm')){try{if(act.ent==='client')await api.deleteClient(act.id);else if(act.ent==='workout')await api.deleteWorkout(act.id);else await api.deleteSession(act.id);return{text:`✅ ${act.ent} **${act.name}** deleted.`};}catch(e){return{text:`❌ ${e.message}`};}} return {text:'Cancelled.'}; }
+  // ===== FLOW ENGINE =====
+  const processFlow = async (userInput) => {
+    const f=flow;const p=userInput.trim();const pl=p.toLowerCase();
+    // ADD CLIENT
+    if(f.type==='add_client'){
+      if(!f.name){setFlow({...f,name:p});return{text:`Got it — **${p}**.\n\n📱 What's their **phone number**?`};}
+      if(!f.phone){const ph=p.replace(/[^+\d]/g,'');if(ph.length<10)return{text:'Please enter a valid 10+ digit phone number:'};setFlow({...f,phone:ph});return{text:`Phone: ${ph}\n\n📧 **Email?** (type "skip" to skip)`};}
+      if(f.email===undefined){const em=pl==='skip'||pl==='no'?'':p;if(em&&!em.includes('@')&&pl!=='skip')return{text:'Enter a valid email or type **skip**:'};
+        try{const r=await api.createClient({name:f.name,phone:f.phone,email:em||null});setCtx(v=>({...v,lastClient:r.client}));setFlow(null);return{text:`✅ **${f.name}** added!\n📱 ${f.phone}${em?'\n📧 '+em:''}\n\nWhat's next? Schedule a session for them?`,actions:[{label:'Clients',tab:'clients'}]};}catch(e){setFlow(null);return{text:`❌ ${e.message}`};}
+      }
     }
-
-    try {
-      // ---- BULK ADD CLIENTS ----
-      if (p.match(/bulk\s+(?:add|import|create)\s+client/i)) {
-        const after = prompt.split(/:\s*/)[1] || prompt.split(/clients?\s+/i).pop();
-        const entries = after.split(/[,;\n]+/).map(e=>e.trim()).filter(Boolean);
-        if (entries.length<2) return {text:'Format: **bulk add clients: Rahul 9876543210, Priya 9123456789, Amit amit@email.com**'};
-        const cls = entries.map(e=>{const ph=e.match(/(\d{10,})/);const em=e.match(/(\S+@\S+\.\S+)/);return{name:e.replace(/\d{10,}/g,'').replace(/\S+@\S+\.\S+/g,'').replace(/[,;]/g,'').trim()||'Unknown',phone:ph?.[1],email:em?.[1]};});
-        const r=await api.bulkImportClients({clients:cls});
-        return {text:`✅ ${r.message}\n\n${cls.map(c=>`• **${c.name}**${c.phone?' — '+c.phone:''}${c.email?' — '+c.email:''}`).join('\n')}`,actions:[{label:'Clients',tab:'clients'}]};
+    // BULK CLIENTS
+    if(f.type==='bulk_clients'){
+      if(!f.count){const n=parseInt(p);if(!n||n<1||n>50)return{text:'Enter a number between 1-50:'};setFlow({...f,count:n,clients:[],idx:0});return{text:`Adding **${n} clients**.\n\n👤 **Name** for client 1:`};}
+      const c=f.clients;const idx=f.idx;
+      if(c.length===idx){c.push({name:p});setFlow({...f,clients:c});return{text:`📱 **Phone** for ${p}:`};}
+      if(!c[idx].phone){const ph=p.replace(/[^+\d]/g,'');if(ph.length<10)return{text:`Invalid. Enter 10+ digits for **${c[idx].name}**:`};c[idx].phone=ph;const next=idx+1;setFlow({...f,clients:c,idx:next});
+        if(next>=f.count){try{const r=await api.bulkImportClients({clients:c});setFlow(null);return{text:`✅ ${r.message}!\n\n${c.map((cl,i)=>`${i+1}. **${cl.name}** — ${cl.phone}`).join('\n')}`,actions:[{label:'Clients',tab:'clients'}]};}catch(e){setFlow(null);return{text:`❌ ${e.message}`};}}
+        return{text:`✅ Got it!\n\n👤 **Name** for client ${next+1} of ${f.count}:`};}
+    }
+    // ADD WORKOUT
+    if(f.type==='add_workout'){
+      if(!f.name){setFlow({...f,name:p});return{text:`Workout: **${p}**\n\n📂 **Category?** (strength, cardio, hiit, yoga, pilates, general)`};}
+      if(!f.category){const cats=['strength','cardio','hiit','yoga','pilates','general','education','music'];const cat=cats.find(c=>pl.includes(c))||'strength';setFlow({...f,category:cat});return{text:`Category: **${cat}**\n\n⏱️ **Duration in minutes?** (30, 45, 60)`};}
+      if(!f.duration){const dur=parseInt(p);if(!dur||dur<5)return{text:'Enter valid minutes (5+):'};setFlow({...f,duration:dur});return{text:`Duration: **${dur}min**\n\n🏷️ **Assign to client?** (name or "skip")`};}
+      if(f.assignDone===undefined){let extra='';let clId=null;
+        if(pl!=='skip'&&pl!=='no'&&pl!=='none'){const cl=await findClient(p);if(!cl)return{text:`"${p}" not found. Enter exact name or **skip**:`};clId=cl.id;extra=`\n📌 Assigned to **${cl.name}** tomorrow 10 AM!`;}
+        try{const r=await api.createWorkout({name:f.name,category:f.category,duration_minutes:f.duration});setCtx(v=>({...v,lastWorkout:r.workout}));
+          if(clId){const d=new Date();d.setDate(d.getDate()+1);d.setHours(10,0,0,0);await api.createSession({client_id:clId,scheduled_at:d.toISOString().slice(0,16),duration_minutes:f.duration,workout_id:r.workout.id});}
+          setFlow(null);return{text:`✅ **${f.name}** created!\n📂 ${f.category} | ⏱️ ${f.duration}min${extra}`,actions:[{label:'Workouts',tab:'workouts'}]};}catch(e){setFlow(null);return{text:`❌ ${e.message}`};}
       }
-
-      // ---- ADD CLIENT ----
-      if (p.match(/(?:add|create|new)\s+(?:a\s+)?client\s+/i)) {
-        const parts=p.replace(/(?:add|create|new)\s+(?:a\s+)?client\s+(?:named?\s+)?/i,'');
-        const ph=parts.match(/(\+?\d[\d\s-]{8,})/);const em=parts.match(/(\S+@\S+\.\S+)/);
-        let name=parts.replace(/(\+?\d[\d\s-]{8,})/g,'').replace(/\S+@\S+\.\S+/g,'').replace(/,?\s*(phone|mobile|email|ph|number)[:\s]*/gi,'').trim();
-        if(!name)return{text:'Need a name. Try: "add client Rahul, phone 9876543210"'};
-        if(!ph){setPendingAction({type:'client_phone',name,email:em?.[1]});return{text:`Adding **${name}**.\n\n📱 What's their **phone number**? (needed for WhatsApp)`};}
-        const r=await api.createClient({name,phone:ph[1].replace(/[\s-]/g,''),email:em?.[1]}); setCtx(v=>({...v,lastClient:r.client}));
-        return{text:`✅ **${name}** added!\nPhone: ${ph[1]}${em?'\nEmail: '+em[1]:''}\n\nSchedule a session? Say "schedule them tomorrow at 10am"`};
+    }
+    // SCHEDULE
+    if(f.type==='schedule'){
+      if(!f.clientName){const cl=await findClient(p);if(!cl){const all=await api.getClients();return{text:`"${p}" not found.\nClients: ${(all.clients||[]).slice(0,10).map(c=>c.name).join(', ')||'none'}`};}setFlow({...f,clientName:cl.name,clientId:cl.id});setCtx(v=>({...v,lastClient:cl}));return{text:`**${cl.name}** selected.\n\n🔄 **How often?**\n• once\n• daily\n• daily (weekdays only)\n• weekly\n• biweekly`};}
+      if(!f.rec){let rec='once';if(pl.includes('daily')&&(pl.includes('weekday')||pl.includes('no week')||pl.includes('skip week')))rec='daily';else if(pl.includes('daily'))rec='daily';else if(pl.includes('weekly'))rec='weekly';else if(pl.includes('biweekly'))rec='biweekly';
+        setFlow({...f,rec});if(rec!=='once')return{text:`**${rec}** schedule.\n\n🔢 **How many sessions?**`};return{text:`Single session.\n\n📅 **When?** (e.g. "tomorrow at 10am")`};}
+      if(f.rec!=='once'&&!f.num){const n=parseInt(p);if(!n)return{text:'Enter number of sessions:'};setFlow({...f,num:n});return{text:`**${n} sessions**.\n\n📅 **Start date & time?** (e.g. "Monday at 10am")`};}
+      if(!f.dt){const dt=parseDate(p);if(!p.match(/\d{1,2}\s*(am|pm)/i))return{text:'Include a time. E.g. "tomorrow at 10am":'};setFlow({...f,dt});return{text:`📅 ${fmtD(dt)}\n\n⏱️ **Duration per session?** (minutes)`};}
+      if(!f.dur){const dur=parseInt(p)||60;setFlow({...f,dur});return{text:`**${dur}min** per session.\n\n🏋️ **Attach workout?** (name or "skip")`};}
+      if(f.wkDone===undefined){let wkId=null,wkN='';if(pl!=='skip'&&pl!=='no'&&pl!=='none'){const wk=await findWorkout(p);if(!wk)return{text:`"${p}" not found. Enter exact name or **skip**:`};wkId=wk.id;wkN=wk.name;}
+        try{if(f.rec==='once'){await api.createSession({client_id:f.clientId,scheduled_at:f.dt.toISOString().slice(0,16),duration_minutes:f.dur,workout_id:wkId});setFlow(null);return{text:`✅ Session booked!\n📅 **${f.clientName}** — ${fmtD(f.dt)}\n⏱️ ${f.dur}min${wkN?'\n🏋️ '+wkN:''}`,actions:[{label:'Schedule',tab:'schedule'}]};}
+          else{const r=await api.createRecurringSessions({client_id:f.clientId,recurrence_type:f.rec,start_date:f.dt.toISOString().slice(0,10),time:f.dt.toTimeString().slice(0,5),num_sessions:f.num,duration_minutes:f.dur});setFlow(null);return{text:`✅ ${r.message}!\n📅 **${f.clientName}** — ${f.rec} from ${fmtD(f.dt)}\n⏱️ ${f.dur}min${wkN?'\n🏋️ '+wkN:''}`,actions:[{label:'Schedule',tab:'schedule'}]};}
+        }catch(e){setFlow(null);return{text:`❌ ${e.message}`};}
       }
-
-      // ---- SHOW CLIENTS ----
-      if(p.match(/(?:show|list|get|view|all|my)\s*(?:my\s+)?client/i)||p==='clients'){const r=await api.getClients();const cl=r.clients||[];if(!cl.length)return{text:'No clients yet. "add client Rahul, phone 9876543210"'};return{text:`📋 **Clients (${cl.length}):**\n\n${cl.slice(0,20).map(c=>`• **${c.name}**${c.phone?' — '+c.phone:''}${c.email?' — '+c.email:''}`).join('\n')}`,actions:[{label:'Clients',tab:'clients'}]};}
-
-      // ---- DELETE CLIENT ----
-      if(p.match(/(?:delete|remove)\s+(?:the\s+)?client/i)){const name=p.replace(/(?:delete|remove)\s+(?:the\s+)?client\s+(?:named?\s+)?/i,'').replace(/["']/g,'').trim();const cl=await findClient(name);if(!cl)return{text:`❌ "${name}" not found.`};setPendingAction({type:'confirm_del',ent:'client',id:cl.id,name:cl.name});return{text:`⚠️ Delete **${cl.name}** and all their data?\nType **yes** to confirm.`};}
-
-      // ---- ADD WORKOUT (with optional client tag) ----
-      if(p.match(/(?:add|create|new)\s+(?:a\s+)?workout/i)){
-        const parts=p.replace(/(?:add|create|new)\s+(?:a\s+)?workout\s+(?:called|named)?\s*/i,'');
-        const nm=(parts.match(/^(.+?)(?:,|\s+(?:for|and|cat|type|dur|\d+\s*min))/i)||[null,parts.split(',')[0]])[1].trim().replace(/["']/g,'');
-        const cat=(parts.match(/(?:cat|type)[:\s]*(strength|cardio|hiit|yoga|pilates|gym|education|music|general)/i)||[])[1]||'strength';
-        const dur=(parts.match(/(\d+)\s*min/i)||[])[1];
-        const clientTag=(parts.match(/(?:for|tag|assign)\s+(?:to\s+)?(.+?)(?:\s*$|,)/i)||[])[1];
-        if(!dur){setPendingAction({type:'workout_dur',name:nm,category:cat,clientTag});return{text:`Creating **${nm}** (${cat}).\n\n⏱️ Duration in **minutes**? (e.g. 30, 45, 60)`};}
-        const r=await api.createWorkout({name:nm,category:cat,duration_minutes:parseInt(dur)});setCtx(v=>({...v,lastWorkout:r.workout}));
-        let extra='';if(clientTag){const cl=await findClient(clientTag);if(cl){const d=new Date();d.setDate(d.getDate()+1);d.setHours(10,0,0,0);await api.createSession({client_id:cl.id,scheduled_at:d.toISOString().slice(0,16),duration_minutes:parseInt(dur),workout_id:r.workout.id});extra=`\n📌 Assigned to **${cl.name}** tomorrow!`;setCtx(v=>({...v,lastClient:cl}));}}
-        return{text:`✅ **${nm}** (${cat}, ${dur}min) created!${extra}`,actions:[{label:'Workouts',tab:'workouts'}]};
-      }
-
-      // ---- SHOW WORKOUTS ----
-      if(p.match(/(?:show|list|get|view|all|my)\s*(?:my\s+)?workout/i)||p==='workouts'){const r=await api.getWorkouts();const wk=r.workouts||[];if(!wk.length)return{text:'No workouts yet. "add workout Leg Day, 45 min, strength"'};return{text:`🏋️ **Workouts (${wk.length}):**\n\n${wk.slice(0,20).map(w=>`• **${w.name}** (${w.category||'general'}) — ${w.duration_minutes||30}min`).join('\n')}`,actions:[{label:'Workouts',tab:'workouts'}]};}
-
-      // ---- DELETE WORKOUT ----
-      if(p.match(/(?:delete|remove)\s+(?:the\s+)?workout/i)){const name=p.replace(/(?:delete|remove)\s+(?:the\s+)?workout\s+(?:called|named)?\s*/i,'').replace(/["']/g,'').trim();const wk=await findWorkout(name);if(!wk)return{text:`❌ "${name}" not found.`};setPendingAction({type:'confirm_del',ent:'workout',id:wk.id,name:wk.name});return{text:`⚠️ Delete **${wk.name}**? Type **yes**.`};}
-
-      // ---- MARK ATTENDANCE ----
-      if(p.match(/mark\s+(.+?)\s+(?:as\s+)?(?:present|attended|absent|no.?show)/i)){
-        const m=p.match(/mark\s+(.+?)\s+(?:as\s+)?(?:present|attended|absent|no.?show)/i);
-        const status=p.includes('absent')||p.includes('no show')?'absent':'attended';
-        const cl=await findClient(m[1].trim());if(!cl)return{text:`❌ "${m[1].trim()}" not found.`};
-        const today=await api.getTodaySchedule();const sess=(today.sessions||[]).find(s=>s.client_id===cl.id&&(s.status==='scheduled'||s.status==='confirmed'));
-        if(!sess){const any=(today.sessions||[]).find(s=>s.client_id===cl.id);if(any)return{text:`⚠️ ${cl.name}'s session already **${any.status}**.`};return{text:`❌ No session for **${cl.name}** today.`};}
-        await api.markAttendance(sess.id,status);
-        return{text:`✅ **${cl.name}** — ${status==='attended'?'**Present ✓**':'**Absent ✗**'}`,actions:[{label:'Today',tab:'today'}]};
-      }
-
-      // ---- SCHEDULE (single + recurring) ----
-      if(p.match(/(?:schedule|book|plan|set)\s+(?:a\s+)?(?:session|workout|training|class)?\s*(?:for|with)\s+/i)||p.match(/^(?:schedule|book)\s+(?:them|him|her)/i)){
-        let parts=p.replace(/(?:schedule|book|plan|set)\s+(?:a\s+)?(?:session|workout|training|class)?\s*(?:for|with)\s+/i,'');
-        const cRes=await api.getClients();const clients=cRes.clients||[];
-        let client=null;for(const c of clients){if(parts.toLowerCase().includes(c.name.toLowerCase())){client=c;break;}}
-        if(!client&&(p.includes('them')||p.includes('him')||p.includes('her'))&&ctx.lastClient)client=ctx.lastClient;
-        if(!client)return{text:`❌ Client not found. Clients: ${clients.map(c=>c.name).join(', ')||'none'}`};
-
-        const wRes=await api.getWorkouts();let workout=null;for(const w of(wRes.workouts||[])){if(parts.toLowerCase().includes(w.name.toLowerCase())){workout=w;break;}}
-        if(!workout)workout=ctx.lastWorkout;
-        const durM=parts.match(/(\d+)\s*min/i);const dur=durM?parseInt(durM[1]):60;
-
-        // Recurring?
-        const recM=p.match(/(daily|weekly|biweekly|weekdays|daily\s+(?:without|skip|no)\s+weekends?)/i);
-        if(recM){
-          let rec=recM[1].toLowerCase();if(rec.includes('weekday')||rec.includes('without')||rec.includes('skip'))rec='daily';
-          const numM=parts.match(/(\d+)\s*(?:sessions|times|classes)/i);const num=numM?parseInt(numM[1]):(rec==='daily'?20:8);
-          const hasTime=parts.match(/\d{1,2}\s*(am|pm)/i);const hasDate=parts.match(/start|from|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}[\/\-]/i);
-          if(!hasTime&&!hasDate){setPendingAction({type:'recur_time',client,rec,num,dur,workout});return{text:`Setting **${rec}** sessions for **${client.name}**${workout?` (${workout.name})`:''}, ${num} sessions, ${dur}min each.\n\n📅 Start when? (e.g. "tomorrow at 10am", "Monday 6pm")`};}
-          const dt=parseDate(parts);
-          try{const r=await api.createRecurringSessions({client_id:client.id,recurrence_type:rec,start_date:dt.toISOString().slice(0,10),time:dt.toTimeString().slice(0,5),num_sessions:num,duration_minutes:dur});setCtx(v=>({...v,lastClient:client}));return{text:`✅ ${r.message}\n📅 **${client.name}** — ${rec} from ${dt.toLocaleDateString('en-IN',{weekday:'long',month:'short',day:'numeric'})} at ${dt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}${workout?'\n🏋️ '+workout.name:''}`,actions:[{label:'Schedule',tab:'schedule'}]};}catch(e){return{text:`❌ ${e.message}`};}
-        }
-
-        // Single
-        const hasTime=parts.match(/\d{1,2}\s*(am|pm)/i);const hasDate=parts.match(/tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}[\/\-]/i);
-        if(!hasTime&&!hasDate){setPendingAction({type:'sched_time',client,workout,dur});return{text:`Scheduling **${client.name}**${workout?` (${workout.name})`:''}, ${dur}min.\n\n🕐 When? (e.g. "tomorrow at 10am")`};}
-        const dt=parseDate(parts);
-        try{await api.createSession({client_id:client.id,scheduled_at:dt.toISOString().slice(0,16),duration_minutes:dur,workout_id:workout?.id});setCtx(v=>({...v,lastClient:client}));return{text:`✅ **${client.name}** — ${dt.toLocaleDateString('en-IN',{weekday:'short',month:'short',day:'numeric'})} at ${dt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}${workout?'\n🏋️ '+workout.name:''}\n⏱️ ${dur}min`,actions:[{label:'Schedule',tab:'schedule'}]};}catch(e){return{text:`❌ ${e.message}`};}
-      }
-
-      // ---- TODAY ----
-      if(p.match(/(?:show|list|what|get|today|my)\s*(?:'s|is)?\s*(?:my\s+)?(?:today|schedule|session|class)/i)||p==='today'){
-        const r=await api.getTodaySchedule();const sess=r.sessions||[];if(!sess.length)return{text:'No sessions today.',actions:[{label:'Plan',tab:'schedule'}]};
-        const st={scheduled:'⏳',confirmed:'✅',completed:'✅',cancelled:'❌',no_show:'❌',in_progress:'▶️'};
-        return{text:`📅 **Today (${sess.length}):**\n\n${sess.map(s=>`${st[s.status]||'⏳'} ${new Date(s.scheduled_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} — **${s.client_name}** ${s.workout_name?'('+s.workout_name+')':''} — ${s.status}`).join('\n')}\n\n"mark [name] as present" to record attendance.`,actions:[{label:'Today',tab:'today'}]};
-      }
-
-      // ---- REMINDERS ----
-      if(p.match(/(?:send|trigger)\s+(?:a\s+)?(?:whatsapp|wa|email|reminder)/i)){const nm=(p.match(/(?:to|for)\s+(.+?)(?:\s*$)/i)||[])[1];if(!nm)return{text:'Who to? "send WhatsApp reminder to Rahul"'};const cl=await findClient(nm.trim().replace(/["']/g,''));if(!cl)return{text:`❌ "${nm}" not found.`};const method=p.includes('email')?'email':'whatsapp';const r=await api.sendPersonalReminder({client_id:cl.id,method});if(r.success&&r.link){window.open(r.link,'_blank');return{text:`✅ ${method==='whatsapp'?'WhatsApp':'Email'} opened for **${cl.name}**!`};}return{text:`❌ ${r.message||'Failed'}`};}
-
-      // ---- PAYMENT ----
-      if(p.match(/(?:create|send|make|generate)\s+(?:a\s+)?payment/i)){const amt=(prompt.match(/(\d[\d,]*)/)||[])[1];const cRes=await api.getClients();let cl=null;for(const c of(cRes.clients||[])){if(prompt.toLowerCase().includes(c.name.toLowerCase())){cl=c;break;}}if(!cl)cl=ctx.lastClient;if(!cl)return{text:'Which client? "create payment link for Rahul 2000"'};if(!amt)return{text:`How much for **${cl.name}**? (e.g. "2000")`};const a=parseInt(amt.replace(/,/g,''));const r=await api.createPaymentLink({client_id:cl.id,amount:a});return r.success?{text:`✅ **${cl.name}** — ₹${a.toLocaleString()}\n🔗 ${r.payment_link}${r.mode==='demo'?'\n⚠️ Demo':''}`,actions:[{label:'Payments',tab:'payments'}]}:{text:'❌ Failed'};}
-
-      // ---- STATS ----
-      if(p.match(/(?:show|get|my)\s*(?:stats|dashboard|overview|summary)/i)||p==='stats'||p==='dashboard'){const r=await api.getDashboardStats();const s=r.stats||{};return{text:`📊 **Dashboard**\n\n👥 Clients: **${s.total_clients||0}**\n📅 Sessions: **${s.total_sessions||0}**\n✅ Completed: **${s.completed_sessions||0}**\n🏋️ Workouts: **${s.total_workouts||0}**`,actions:[{label:'Dashboard',tab:'dashboard'}]};}
-
-      // ---- HELP ----
-      if(p.match(/^(?:help|what can|commands|options|how)/i))return{text:`**📋 All Commands:**\n\n**Clients:**\n• "Add client Rahul, phone 9876543210"\n• "Bulk add clients: Rahul 9876543210, Priya 9123456789"\n• "Show clients" / "Delete client Rahul"\n\n**Workouts:**\n• "Add workout Leg Day, 45 min, strength"\n• "Add workout Yoga Flow, 30 min for Priya" (create+assign)\n• "Show workouts" / "Delete workout Leg Day"\n\n**Scheduling:**\n• "Schedule Rahul tomorrow at 10am"\n• "Schedule Priya weekly starting Monday 6pm"\n• "Schedule Rahul daily without weekends, 20 sessions"\n\n**Attendance:**\n• "Mark Rahul as present" / "Mark Priya as absent"\n\n**Reminders:** "Send WhatsApp reminder to Rahul"\n**Payments:** "Create payment link for Rahul 2000"\n**Stats:** "Show my stats"\n\n💡 I remember context! After adding a client, say "schedule them tomorrow"`};
-
-      // ---- CONTEXT: schedule them ----
-      if(p.match(/^(?:schedule|book)\s+(?:them|him|her)/i)&&ctx.lastClient){setPendingAction({type:'sched_time',client:ctx.lastClient,workout:ctx.lastWorkout,dur:60});return{text:`Scheduling **${ctx.lastClient.name}**${ctx.lastWorkout?' ('+ctx.lastWorkout.name+')':''}.\n\n🕐 When?`};}
-
-      return{text:`🤔 Try:\n• "Add client [name], phone [number]"\n• "Schedule [client] tomorrow at 10am"\n• "Mark [client] as present"\n• "Show clients" / "Show stats"\n\nType **help** for all commands.`};
-    } catch(error){return{text:`❌ Error: ${error.message}`};}
+    }
+    // ATTENDANCE
+    if(f.type==='attendance'){
+      if(!f.clientName){const cl=await findClient(p);if(!cl)return{text:`"${p}" not found. Enter exact name:`};setFlow({...f,clientName:cl.name,clientId:cl.id});return{text:`**${cl.name}** — mark as:\n✅ **present** or ❌ **absent**`};}
+      if(!f.status){const st=pl.includes('absent')||pl.includes('no')?'absent':'attended';const today=await api.getTodaySchedule();const sess=(today.sessions||[]).find(s=>s.client_id===f.clientId&&(s.status==='scheduled'||s.status==='confirmed'));
+        if(!sess){const any=(today.sessions||[]).find(s=>s.client_id===f.clientId);setFlow(null);return any?{text:`⚠️ ${f.clientName} already **${any.status}**.`}:{text:`❌ No session for **${f.clientName}** today.`};}
+        await api.markAttendance(sess.id,st);setFlow(null);return{text:`✅ **${f.clientName}** — **${st==='attended'?'Present ✓':'Absent ✗'}**`,actions:[{label:'Today',tab:'today'}]};}
+    }
+    // CONFIRM DELETE
+    if(f.type==='confirm_del'){if(pl==='yes'||pl==='y'||pl==='ok'||pl==='confirm'){try{if(f.ent==='client')await api.deleteClient(f.id);else if(f.ent==='workout')await api.deleteWorkout(f.id);setFlow(null);return{text:`✅ **${f.name}** deleted.`};}catch(e){setFlow(null);return{text:`❌ ${e.message}`};}}setFlow(null);return{text:'Cancelled.'};}
+    return null;
   };
 
-  const handleSubmit = async (e) => { e.preventDefault();if(!input.trim()||loading)return;const m=input.trim();setInput('');setMessages(p=>[...p,{role:'user',text:m}]);setLoading(true);const r=await exec(m);setMessages(p=>[...p,{role:'ai',...r}]);setLoading(false);inputRef.current?.focus(); };
-  const handleAction = (a) => { if(a.tab)window.dispatchEvent(new CustomEvent('navigate-tab',{detail:a.tab})); };
-  const fmt = (text) => text.split('\n').map((l,i) => <div key={i} dangerouslySetInnerHTML={{__html:l.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')||'&nbsp;'}} />);
-  const qp = ['Show my clients','Today\'s schedule','Show my stats','Show workouts','Help'];
+  // ===== INTENT ROUTER =====
+  const processIntent = async (userInput) => {
+    const p=userInput.trim();const pl=p.toLowerCase();
+    // ADD CLIENT
+    if(pl.match(/(?:add|create|new|register)\s+(?:a\s+)?(?:new\s+)?client/i)||pl.match(/^i\s+want\s+to\s+add/i)){
+      const inline=pl.replace(/(?:add|create|new|register)\s+(?:a\s+)?(?:new\s+)?client\s*(?:named?\s+)?/i,'');
+      if(inline.length>2){const ph=inline.match(/(\+?\d[\d\s-]{8,})/);const em=inline.match(/(\S+@\S+\.\S+)/);let nm=inline.replace(/(\+?\d[\d\s-]{8,})/g,'').replace(/\S+@\S+\.\S+/g,'').replace(/,?\s*(phone|mobile|email|ph)[:\s]*/gi,'').replace(/[,]/g,' ').trim();
+        if(nm&&ph){try{const r=await api.createClient({name:nm,phone:ph[1].replace(/[\s-]/g,''),email:em?.[1]||null});setCtx(v=>({...v,lastClient:r.client}));return{text:`✅ **${nm}** added! 📱 ${ph[1]}${em?'\n📧 '+em[1]:''}`,actions:[{label:'Clients',tab:'clients'}]};}catch(e){return{text:`❌ ${e.message}`};}}
+        if(nm){setFlow({type:'add_client',name:nm});return{text:`Adding **${nm}**.\n\n📱 **Phone number?**`};}
+      }
+      setFlow({type:'add_client'});return{text:"Let's add a client!\n\n👤 **What's their name?**"};
+    }
+    // BULK CLIENTS
+    if(pl.match(/(?:add|create|import)\s+(?:\d+\s+)?(?:multiple|bulk|many|several)\s*client/i)||pl.match(/bulk\s+(?:add|import)/i)||pl.match(/add\s+(\d+)\s+client/i)){
+      const colon=p.split(/:\s*/)[1];if(colon){const entries=colon.split(/[,;\n]+/).map(e=>e.trim()).filter(Boolean);if(entries.length>=2){const cls=entries.map(e=>{const ph=e.match(/(\d{10,})/);return{name:e.replace(/\d{10,}/g,'').trim()||'Unknown',phone:ph?.[1]};});try{const r=await api.bulkImportClients({clients:cls});return{text:`✅ ${r.message}!\n\n${cls.map((c,i)=>`${i+1}. **${c.name}**${c.phone?' — '+c.phone:''}`).join('\n')}`,actions:[{label:'Clients',tab:'clients'}]};}catch(e){return{text:`❌ ${e.message}`};}}}
+      const nm=pl.match(/(\d+)\s*client/);setFlow({type:'bulk_clients',count:nm?parseInt(nm[1]):null});return nm?{text:`Adding **${nm[1]} clients**.\n\n👤 **Name** for client 1:`}:{text:'How many clients to add?'};
+    }
+    // ADD WORKOUT
+    if(pl.match(/(?:add|create|new)\s+(?:a\s+)?(?:new\s+)?workout/i)){
+      const inline=pl.replace(/(?:add|create|new)\s+(?:a\s+)?(?:new\s+)?workout\s*(?:called|named)?\s*/i,'');
+      if(inline.length>2){const nm=(inline.match(/^(.+?)(?:,|\s+(?:cat|type|dur|\d+\s*min|for\s))/i)||[null,inline.split(',')[0]])[1].trim().replace(/["']/g,'');
+        if(nm){setFlow({type:'add_workout',name:nm});return{text:`Workout: **${nm}**\n\n📂 **Category?** (strength, cardio, hiit, yoga, general)`};}}
+      setFlow({type:'add_workout'});return{text:"Let's create a workout!\n\n🏋️ **What's the name?**"};
+    }
+    // SCHEDULE
+    if(pl.match(/(?:schedule|book|plan|set)\s+/i)){
+      if(pl.match(/(?:them|him|her)/i)&&ctx.lastClient){setFlow({type:'schedule',clientName:ctx.lastClient.name,clientId:ctx.lastClient.id});return{text:`Scheduling **${ctx.lastClient.name}**.\n\n🔄 **How often?** (once/daily/weekly/biweekly)`};}
+      const allCl=await api.getClients();let cl=null;for(const c of(allCl.clients||[])){if(pl.includes(c.name.toLowerCase())){cl=c;break;}}
+      if(cl){setFlow({type:'schedule',clientName:cl.name,clientId:cl.id});setCtx(v=>({...v,lastClient:cl}));return{text:`Scheduling **${cl.name}**.\n\n🔄 **How often?** (once/daily/weekdays only/weekly/biweekly)`};}
+      setFlow({type:'schedule'});return{text:"Let's schedule a session!\n\n👤 **Which client?**"};
+    }
+    // MARK ATTENDANCE
+    if(pl.match(/mark\s+/i)&&pl.match(/(present|absent|attend|no.?show)/i)){const m=pl.match(/mark\s+(.+?)\s+(?:as\s+)?(?:present|absent)/i);if(m){const cl=await findClient(m[1].trim());if(cl){const st=pl.includes('absent')?'absent':'attended';const td=await api.getTodaySchedule();const sess=(td.sessions||[]).find(s=>s.client_id===cl.id&&(s.status==='scheduled'||s.status==='confirmed'));if(!sess)return{text:`❌ No session for **${cl.name}** today.`};await api.markAttendance(sess.id,st);return{text:`✅ **${cl.name}** — **${st==='attended'?'Present ✓':'Absent ✗'}**`,actions:[{label:'Today',tab:'today'}]};}}setFlow({type:'attendance'});return{text:'👤 **Which client?**'};}
+    if(pl.match(/(?:mark|take|record)\s*(?:attendance)/i)){setFlow({type:'attendance'});return{text:'👤 **Which client?**'};}
+    // DELETE
+    if(pl.match(/(?:delete|remove)\s+(?:the\s+)?client\s+/i)){const nm=pl.replace(/(?:delete|remove)\s+(?:the\s+)?client\s+(?:named?\s+)?/i,'').trim();const cl=await findClient(nm);if(!cl)return{text:`❌ "${nm}" not found.`};setFlow({type:'confirm_del',ent:'client',id:cl.id,name:cl.name});return{text:`⚠️ Delete **${cl.name}**? Type **yes** or **no**.`};}
+    if(pl.match(/(?:delete|remove)\s+(?:the\s+)?workout/i)){const nm=pl.replace(/(?:delete|remove)\s+(?:the\s+)?workout\s*(?:called|named)?\s*/i,'').trim();const wk=await findWorkout(nm);if(!wk)return{text:`❌ "${nm}" not found.`};setFlow({type:'confirm_del',ent:'workout',id:wk.id,name:wk.name});return{text:`⚠️ Delete **${wk.name}**? Type **yes** or **no**.`};}
+    // SHOW/LIST
+    if(pl.match(/(?:show|list|get|view|all|my)\s*(?:my\s+)?client/i)||pl==='clients'){const r=await api.getClients();const cl=r.clients||[];if(!cl.length)return{text:'No clients yet. Say **"add a client"**!'};return{text:`📋 **Clients (${cl.length}):**\n\n${cl.slice(0,20).map((c,i)=>`${i+1}. **${c.name}**${c.phone?' — '+c.phone:''}`).join('\n')}`,actions:[{label:'Clients',tab:'clients'}]};}
+    if(pl.match(/(?:show|list|get|view|all|my)\s*(?:my\s+)?workout/i)||pl==='workouts'){const r=await api.getWorkouts();const wk=r.workouts||[];if(!wk.length)return{text:'No workouts. Say **"create a workout"**!'};return{text:`🏋️ **Workouts (${wk.length}):**\n\n${wk.map((w,i)=>`${i+1}. **${w.name}** (${w.category||'-'}) ${w.duration_minutes||30}min`).join('\n')}`,actions:[{label:'Workouts',tab:'workouts'}]};}
+    if(pl.match(/(?:show|what|today|my)\s*(?:'s|is)?\s*(?:my\s+)?(?:today|schedule|session)/i)||pl==='today'){const r=await api.getTodaySchedule();const s=r.sessions||[];if(!s.length)return{text:'No sessions today.',actions:[{label:'Plan',tab:'schedule'}]};const ic={scheduled:'⏳',confirmed:'✅',completed:'✅',cancelled:'❌',no_show:'❌',in_progress:'▶️'};return{text:`📅 **Today (${s.length}):**\n\n${s.map(x=>`${ic[x.status]||'⏳'} ${new Date(x.scheduled_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} — **${x.client_name}** ${x.workout_name?'('+x.workout_name+')':''} [${x.status}]`).join('\n')}\n\n💡 "mark [name] present" for attendance`,actions:[{label:'Today',tab:'today'}]};}
+    // REMINDERS
+    if(pl.match(/(?:send|trigger)\s+(?:a\s+)?(?:whatsapp|wa|email|reminder)/i)){const nm=(pl.match(/(?:to|for)\s+(.+?)$/i)||[])[1];if(!nm)return{text:'Who to? "send reminder to Rahul"'};const cl=await findClient(nm.trim());if(!cl)return{text:`❌ "${nm}" not found.`};const mt=pl.includes('email')?'email':'whatsapp';const r=await api.sendPersonalReminder({client_id:cl.id,method:mt});if(r.success&&r.link){window.open(r.link,'_blank');return{text:`✅ ${mt==='whatsapp'?'WhatsApp':'Email'} for **${cl.name}**!`};}return{text:`❌ ${r.message||'Failed'}`};}
+    // PAYMENT
+    if(pl.match(/(?:create|send|make)\s+(?:a\s+)?payment/i)){const amt=(p.match(/(\d[\d,]*)/)||[])[1];const cR=await api.getClients();let cl=null;for(const c of(cR.clients||[])){if(pl.includes(c.name.toLowerCase())){cl=c;break;}}if(!cl)cl=ctx.lastClient;if(!cl)return{text:'Which client? "payment for Rahul 2000"'};if(!amt)return{text:`Amount for **${cl.name}**?`};const a=parseInt(amt.replace(/,/g,''));const r=await api.createPaymentLink({client_id:cl.id,amount:a});return r.success?{text:`✅ **${cl.name}** — ₹${a.toLocaleString()}\n🔗 ${r.payment_link}`,actions:[{label:'Payments',tab:'payments'}]}:{text:'❌ Failed'};}
+    // STATS
+    if(pl.match(/(?:show|get|my)\s*(?:stats|dashboard|overview|summary)/i)||pl==='stats'||pl==='dashboard'){const r=await api.getDashboardStats();const s=r.stats||{};return{text:`📊 **Dashboard**\n\n👥 Clients: **${s.total_clients||0}**\n📅 Sessions: **${s.total_sessions||0}**\n✅ Completed: **${s.completed_sessions||0}**\n🏋️ Workouts: **${s.total_workouts||0}**`,actions:[{label:'Dashboard',tab:'dashboard'}]};}
+    // LEADS
+    if(pl.match(/(?:show|get|check|view|my|new)\s*(?:leads?|interest|callback|inbox|requests?)/i)||pl==='leads'){const r=await api.getLeads();const leads=r.leads||[];if(!leads.length)return{text:'📥 No leads yet. When clients express interest on your CoachMe.life profile, they\'ll appear here.',actions:[{label:'Leads',tab:'leads'}]};const newCount=leads.filter(l=>l.status==='new').length;return{text:`📥 **Leads (${leads.length} total, ${newCount} new):**\n\n${leads.slice(0,10).map((l,i)=>`${i+1}. ${l.status==='new'?'🔴':'⚪'} **${l.name}** (${l.lead_type}) — ${l.phone||l.email||'no contact'}${l.message?'\n   "'+l.message.slice(0,60)+'"':''}`).join('\n')}${leads.length>10?'\n...+'+(leads.length-10)+' more':''}`,actions:[{label:'View All Leads',tab:'leads'}]};}
+    // HELP
+    if(pl.match(/^(?:help|what can|commands|how)/i))return{text:"**I can help with:**\n\n👥 **\"Add a client\"** — step-by-step guided\n👥 **\"Add 5 clients\"** — bulk add with prompts\n🏋️ **\"Create a workout\"** — guided creation\n📅 **\"Schedule a session\"** — walks through all options\n✅ **\"Mark Rahul present\"** — attendance\n📱 **\"Send WhatsApp to Rahul\"** — reminders\n💰 **\"Payment for Rahul 2000\"** — payment links\n📊 **\"Show my stats\"** — dashboard\n🗑️ **\"Delete client/workout [name]\"**\n\n💡 After adding someone, say \"schedule them\" — I remember context!"};
+    // FALLBACK
+    return{text:"I can help you:\n• **\"Add a client\"** — guided step-by-step\n• **\"Create a workout\"**\n• **\"Schedule a session\"**\n• **\"Mark [name] present\"**\n• **\"Show my clients/stats\"**\n\nType **help** for full list."};
+  };
+
+  const handleSubmit = async(e)=>{e.preventDefault();if(!input.trim()||loading)return;const msg=input.trim();setInput('');setMessages(prev=>[...prev,{role:'user',text:msg}]);setLoading(true);try{let r=null;if(flow)r=await processFlow(msg);if(!r)r=await processIntent(msg);setMessages(prev=>[...prev,{role:'ai',...r}]);}catch(err){setMessages(prev=>[...prev,{role:'ai',text:`❌ ${err.message}`}]);}setLoading(false);inputRef.current?.focus();};
+  const handleAction=(a)=>{if(a.tab)window.dispatchEvent(new CustomEvent('navigate-tab',{detail:a.tab}));};
+  const fmt=(text)=>text.split('\n').map((l,i)=><div key={i} dangerouslySetInnerHTML={{__html:l.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')||'&nbsp;'}} />);
+  const qp=['Add a client','Create a workout','Schedule a session','Today\'s schedule','Show my stats','Help'];
 
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)]">
       <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center"><Sparkles size={20} className="text-white" /></div><div><h1 className="text-xl font-bold">AI Coach Assistant</h1><p className="text-xs text-slate-500">Context-aware — I remember our conversation!</p></div></div>
-        <button onClick={()=>{setMessages([messages[0]]);setPendingAction(null);setCtx({lastClient:null,lastWorkout:null});}} className="px-3 py-1.5 text-xs bg-slate-100 rounded-lg hover:bg-slate-200 font-medium">Clear Chat</button>
+        <div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center"><Sparkles size={20} className="text-white" /></div><div><h1 className="text-xl font-bold">AI Coach Assistant</h1><p className="text-xs text-slate-500">I'll guide you step by step</p></div></div>
+        <button onClick={()=>{setMessages([messages[0]]);setFlow(null);setCtx({lastClient:null,lastWorkout:null});}} className="px-3 py-1.5 text-xs bg-slate-100 rounded-lg hover:bg-slate-200 font-medium">Clear</button>
       </div>
       <div className="flex-1 overflow-y-auto space-y-4 pb-4 pr-1">
-        {messages.map((msg,i) => (<div key={i} className={`flex ${msg.role==='user'?'justify-end':'justify-start'}`}><div className={`max-w-[85%] rounded-2xl px-5 py-3.5 ${msg.role==='user'?'bg-blue-600 text-white':'bg-white border shadow-sm'}`}><div className={`text-sm leading-relaxed ${msg.role==='user'?'text-white':'text-slate-700'}`}>{fmt(msg.text)}</div>{msg.actions&&<div className="flex flex-wrap gap-2 mt-3">{msg.actions.map((a,j)=><button key={j} onClick={()=>handleAction(a)} className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-semibold hover:bg-blue-100 border border-blue-200">{a.label} →</button>)}</div>}</div></div>))}
+        {messages.map((msg,i)=>(<div key={i} className={`flex ${msg.role==='user'?'justify-end':'justify-start'}`}><div className={`max-w-[85%] rounded-2xl px-5 py-3.5 ${msg.role==='user'?'bg-blue-600 text-white':'bg-white border shadow-sm'}`}><div className={`text-sm leading-relaxed ${msg.role==='user'?'text-white':'text-slate-700'}`}>{fmt(msg.text)}</div>{msg.actions&&<div className="flex flex-wrap gap-2 mt-3">{msg.actions.map((a,j)=><button key={j} onClick={()=>handleAction(a)} className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-semibold hover:bg-blue-100 border border-blue-200">{a.label} →</button>)}</div>}</div></div>))}
         {loading&&<div className="flex justify-start"><div className="bg-white border rounded-2xl px-5 py-3.5 shadow-sm"><div className="flex items-center gap-2 text-sm text-slate-500"><Loader size={16} className="animate-spin" /> Working...</div></div></div>}
         <div ref={bottomRef} />
       </div>
       {messages.length<=1&&<div className="flex flex-wrap gap-2 mb-3">{qp.map((q,i)=><button key={i} onClick={()=>setInput(q)} className="px-3 py-2 bg-white border rounded-xl text-sm text-slate-600 hover:bg-slate-50">{q}</button>)}</div>}
-      {pendingAction&&<div className="mb-2 px-4 py-2 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-700 font-medium">⏳ Waiting for your answer...</div>}
+      {flow&&<div className="mb-2 px-4 py-2 bg-violet-50 border border-violet-200 rounded-xl text-xs text-violet-700 font-medium flex items-center gap-2"><Sparkles size={12} />{flow.type.replace(/_/g,' ')} in progress <button onClick={()=>{setFlow(null);setMessages(prev=>[...prev,{role:'ai',text:'Cancelled. What would you like to do?'}]);}} className="ml-auto underline">Cancel</button></div>}
       <form onSubmit={handleSubmit} className="flex gap-3 bg-white rounded-2xl border shadow-sm p-2">
-        <input ref={inputRef} value={input} onChange={e=>setInput(e.target.value)} placeholder={pendingAction?'Type your answer...':'Try: "Add client Rahul, phone 9876543210"'} className="flex-1 px-4 py-3 outline-none text-sm" disabled={loading} />
-        <button type="submit" disabled={loading||!input.trim()} className="px-5 py-3 bg-blue-600 text-white rounded-xl font-bold text-sm disabled:opacity-40 flex items-center gap-2 hover:bg-blue-700"><Send size={16} /> Send</button>
+        <input ref={inputRef} value={input} onChange={e=>setInput(e.target.value)} placeholder={flow?'Type your answer...':'Tell me what you need...'} className="flex-1 px-4 py-3 outline-none text-sm" disabled={loading} />
+        <button type="submit" disabled={loading||!input.trim()} className="px-5 py-3 bg-blue-600 text-white rounded-xl font-bold text-sm disabled:opacity-40 flex items-center gap-2 hover:bg-blue-700"><Send size={16} /></button>
       </form>
+    </div>
+  );
+};
+
+// === LEADS / INBOX ===
+const LeadsView = ({ showToast }) => {
+  const [leads, setLeads] = useState([]);
+  const [filter, setFilter] = useState('all');
+  const [loading, setLoading] = useState(true);
+  const load = () => { setLoading(true); api.getLeads(filter === 'all' ? null : filter).then(r => { setLeads(r.leads || []); setLoading(false); }).catch(() => setLoading(false)); };
+  useEffect(load, [filter]);
+
+  const updateStatus = async (id, status) => {
+    await api.updateLead(id, { status }); showToast(`Lead marked as ${status}`); load();
+  };
+  const convertToClient = async (id) => {
+    try { const r = await api.convertLead(id); showToast(r.message || 'Converted!'); load(); }
+    catch (e) { showToast(e.message, 'error'); }
+  };
+
+  const typeColors = { interest: 'bg-blue-100 text-blue-700', callback: 'bg-amber-100 text-amber-700', referral: 'bg-purple-100 text-purple-700' };
+  const statusColors = { new: 'bg-emerald-100 text-emerald-700', contacted: 'bg-blue-100 text-blue-700', converted: 'bg-violet-100 text-violet-700', closed: 'bg-slate-100 text-slate-500' };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div><h1 className="text-2xl font-bold">Leads & Interest Requests</h1><p className="text-sm text-slate-500 mt-1">People interested in your coaching from CoachMe.life</p></div>
+        <div className="flex items-center gap-2 bg-white rounded-xl border p-1">
+          {['all','new','contacted','converted','closed'].map(f => (
+            <button key={f} onClick={() => setFilter(f)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${filter===f?'bg-blue-600 text-white':'hover:bg-slate-50'}`}>{f === 'all' ? 'All' : f.charAt(0).toUpperCase()+f.slice(1)}</button>
+          ))}
+        </div>
+      </div>
+      {loading ? <div className="text-center py-12 text-slate-400">Loading...</div> :
+      leads.length === 0 ? (
+        <div className="bg-white rounded-2xl border p-12 text-center">
+          <Inbox size={48} className="mx-auto text-slate-300 mb-4" />
+          <h3 className="text-lg font-bold text-slate-400">No leads yet</h3>
+          <p className="text-sm text-slate-400 mt-1">When someone expresses interest on your CoachMe.life profile, they'll appear here.</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {leads.map(lead => (
+            <div key={lead.id} className="bg-white rounded-2xl border p-5 hover:shadow-md transition-all">
+              <div className="flex items-start justify-between">
+                <div className="flex items-start gap-4">
+                  <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center font-bold text-lg flex-shrink-0">{(lead.name||'?')[0]}</div>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="font-bold">{lead.name}</h3>
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${typeColors[lead.lead_type]||'bg-slate-100'}`}>{lead.lead_type}</span>
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${statusColors[lead.status]||'bg-slate-100'}`}>{lead.status}</span>
+                    </div>
+                    <div className="flex items-center gap-4 mt-1 text-sm text-slate-500">
+                      {lead.phone && <span>📱 {lead.phone}</span>}
+                      {lead.email && <span>📧 {lead.email}</span>}
+                      <span>📅 {new Date(lead.created_at).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'})}</span>
+                    </div>
+                    {lead.message && <p className="mt-2 text-sm text-slate-600 bg-slate-50 rounded-xl p-3">"{lead.message}"</p>}
+                    {lead.referred_by_name && <p className="mt-1 text-xs text-purple-600">🔗 Referred by: {lead.referred_by_name} {lead.referred_by_email ? `(${lead.referred_by_email})` : ''}</p>}
+                    {lead.coach_notes && <p className="mt-1 text-xs text-slate-400 italic">Notes: {lead.coach_notes}</p>}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {lead.status === 'new' && (
+                    <>
+                      <button onClick={() => updateStatus(lead.id, 'contacted')} className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-semibold hover:bg-blue-100 border border-blue-200">Contacted</button>
+                      <button onClick={() => convertToClient(lead.id)} className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-semibold hover:bg-emerald-700 flex items-center gap-1"><UserPlus size={12} /> Convert</button>
+                    </>
+                  )}
+                  {lead.status === 'contacted' && (
+                    <button onClick={() => convertToClient(lead.id)} className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-semibold hover:bg-emerald-700 flex items-center gap-1"><UserPlus size={12} /> Convert to Client</button>
+                  )}
+                  {lead.status !== 'closed' && lead.status !== 'converted' && (
+                    <button onClick={() => updateStatus(lead.id, 'closed')} className="px-2 py-1.5 text-slate-400 hover:text-red-500 text-xs">✕</button>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 };
@@ -752,6 +835,7 @@ const DashboardView = () => {
 // === MAIN APP ===
 const navItems = [
   { id: 'prompt', icon: Sparkles, label: 'AI Assistant' },
+  { id: 'leads', icon: Inbox, label: 'Leads' },
   { id: 'today', icon: Zap, label: 'Today' },
   { id: 'clients', icon: Users, label: 'Clients' },
   { id: 'workouts', icon: Dumbbell, label: 'Workouts' },
@@ -790,7 +874,7 @@ function App() {
     <div className="min-h-screen bg-slate-50 flex">
       {mobileOpen && <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={() => setMobileOpen(false)} />}
       <aside className={`fixed lg:sticky top-0 left-0 h-screen w-64 bg-white border-r flex flex-col z-50 transition-transform ${mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
-        <div className="p-5 border-b"><div className="flex items-center justify-between"><div className="flex items-center gap-2"><div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold text-lg">{(coachUser.full_name||'C')[0]}</div><div><span className="font-bold text-sm block">{coachUser.full_name}</span><span className="text-xs text-slate-400">Coach</span></div></div><button onClick={() => setMobileOpen(false)} className="lg:hidden"><X size={20} /></button></div></div>
+        <div className="p-5 border-b"><div className="flex items-center justify-between"><div className="flex items-center gap-2">{coachUser.logo_url ? <img src={coachUser.logo_url} className="w-9 h-9 rounded-xl object-cover" /> : <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold text-lg">{(coachUser.full_name||'C')[0]}</div>}<div><span className="font-bold text-sm block">{coachUser.full_name}</span><span className="text-xs text-slate-400">Coach</span></div></div><button onClick={() => setMobileOpen(false)} className="lg:hidden"><X size={20} /></button></div></div>
         <nav className="flex-1 p-3 space-y-1">{navItems.map(item => (
           <button key={item.id} onClick={() => { setTab(item.id); setMobileOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${tab === item.id ? 'bg-blue-50 text-blue-700' : 'text-slate-600 hover:bg-slate-50'}`}><item.icon size={20} />{item.label}</button>
         ))}</nav>
@@ -804,6 +888,7 @@ function App() {
         </header>
         <main className="flex-1 p-6 overflow-auto"><div className="max-w-6xl mx-auto">
           {tab === 'prompt' && <PromptView showToast={showToast} />}
+          {tab === 'leads' && <LeadsView showToast={showToast} />}
           {tab === 'today' && <TodayView onNavigate={setTab} showToast={showToast} />}
           {tab === 'clients' && <ClientsView showToast={showToast} />}
           {tab === 'workouts' && <WorkoutsView showToast={showToast} />}

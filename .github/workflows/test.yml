@@ -1,0 +1,40 @@
+name: API Tests
+
+on:
+  push:
+    branches: [main]
+    paths: ['backend/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install test dependencies
+        run: pip install pytest httpx
+
+      - name: Wait for deployment
+        run: sleep 30
+
+      - name: Run API tests
+        env:
+          API_URL: https://coach-api-1770519048.azurewebsites.net/api/v1
+        run: |
+          cd backend
+          pytest tests/test_api.py -v --tb=short 2>&1 | tee test_results.txt
+          
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: backend/test_results.txt
