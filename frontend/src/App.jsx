@@ -553,275 +553,176 @@ const ProgressView = ({ showToast }) => {
   );
 };
 
+
 // === AI PROMPT VIEW ===
 const PromptView = ({ showToast }) => {
-  const [messages, setMessages] = useState([{ role: 'ai', text: 'Hi Coach! I\'m your AI assistant. Tell me what you need in plain English.\n\nTry things like:\n• "Add a client named Rahul, phone 9876543210"\n• "Schedule a strength session for Rahul tomorrow at 10am"\n• "Show me all my clients"\n• "Delete the workout called Leg Day"\n• "Send a WhatsApp reminder to Priya"\n• "Create a payment link for Ananya for 2000 rupees"' }]);
+  const [messages, setMessages] = useState([{ role: 'ai', text: 'Hi Coach! I\'m your AI assistant. I remember our conversation!\n\nTry:\n• "Add client Rahul, phone 9876543210"\n• "Add workout Chest Day, 45 min, strength"\n• "Schedule Rahul for Chest Day, daily starting Monday, skip weekends"\n• "Mark Rahul as present today"\n• "Bulk add clients: Rahul 9876543210, Priya 9123456789"\n• "Send WhatsApp reminder to Rahul"\n• "Create payment link for Rahul 2000 rupees"\n• "Show my stats"' }]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [pendingAction, setPendingAction] = useState(null);
+  const [ctx, setCtx] = useState({ lastClient: null, lastWorkout: null });
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
-
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
-  const parseAndExecute = async (prompt) => {
+  const findClient = async (name) => { const r = await api.getClients(); const n = name.toLowerCase(); return (r.clients||[]).find(c => c.name.toLowerCase()===n) || (r.clients||[]).find(c => c.name.toLowerCase().includes(n)); };
+  const findWorkout = async (name) => { const r = await api.getWorkouts(); const n = name.toLowerCase(); return (r.workouts||[]).find(w => w.name.toLowerCase()===n) || (r.workouts||[]).find(w => w.name.toLowerCase().includes(n)); };
+  const parseDate = (text) => {
+    const dt = new Date(); const t = text.toLowerCase();
+    if (t.includes('tomorrow')) dt.setDate(dt.getDate()+1);
+    else if (t.match(/next\s+(mon|tue|wed|thu|fri|sat|sun)/i)) { const days=['sun','mon','tue','wed','thu','fri','sat']; const tgt=days.findIndex(d=>t.includes(d)); if(tgt>=0){while(dt.getDay()!==tgt||dt.toDateString()===new Date().toDateString())dt.setDate(dt.getDate()+1);} }
+    else { const m=text.match(/(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?/); if(m){dt.setMonth(parseInt(m[1])-1,parseInt(m[2]));if(m[3])dt.setFullYear(m[3].length===2?2000+parseInt(m[3]):parseInt(m[3]));} }
+    const tm=text.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i); if(tm){let h=parseInt(tm[1]);if(tm[3].toLowerCase()==='pm'&&h<12)h+=12;if(tm[3].toLowerCase()==='am'&&h===12)h=0;dt.setHours(h,parseInt(tm[2]||'0'),0,0);} else dt.setHours(10,0,0,0);
+    return dt;
+  };
+
+  const exec = async (prompt) => {
     const p = prompt.toLowerCase().trim();
-    const coachId = getCoachId();
-    const results = [];
+    // ---- PENDING ACTION RESPONSES ----
+    if (pendingAction) {
+      const act = pendingAction; setPendingAction(null);
+      if (act.type==='client_phone') { const ph=prompt.trim().replace(/[^+\d]/g,''); try { const r=await api.createClient({name:act.name,phone:ph,email:act.email}); setCtx(v=>({...v,lastClient:r.client})); return {text:`✅ **${act.name}** added! Phone: ${ph}${act.email?'\nEmail: '+act.email:''}\n\nSchedule a session? Say "schedule them tomorrow at 10am"`}; } catch(e) { return {text:`❌ ${e.message}`}; } }
+      if (act.type==='workout_dur') { const dur=parseInt(prompt)||30; try { const r=await api.createWorkout({name:act.name,category:act.category,duration_minutes:dur}); setCtx(v=>({...v,lastWorkout:r.workout})); let extra=''; if(act.clientTag){const cl=await findClient(act.clientTag);if(cl){const d=new Date();d.setDate(d.getDate()+1);d.setHours(10,0,0,0);await api.createSession({client_id:cl.id,scheduled_at:d.toISOString().slice(0,16),duration_minutes:dur,workout_id:r.workout.id});extra=`\n📌 Assigned to **${cl.name}** tomorrow at 10 AM!`;}} return {text:`✅ Workout **${act.name}** (${act.category}, ${dur}min) created!${extra}`}; } catch(e) { return {text:`❌ ${e.message}`}; } }
+      if (act.type==='sched_time') { const dt=parseDate(prompt); try { await api.createSession({client_id:act.client.id,scheduled_at:dt.toISOString().slice(0,16),duration_minutes:act.dur||60,workout_id:act.workout?.id}); setCtx(v=>({...v,lastClient:act.client})); return {text:`✅ **${act.client.name}** scheduled ${dt.toLocaleDateString('en-IN',{weekday:'short',month:'short',day:'numeric'})} at ${dt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}${act.workout?'\n🏋️ '+act.workout.name:''}`,actions:[{label:'Schedule',tab:'schedule'}]}; } catch(e) { return {text:`❌ ${e.message}`}; } }
+      if (act.type==='recur_time') { const dt=parseDate(prompt); try { const r=await api.createRecurringSessions({client_id:act.client.id,recurrence_type:act.rec,start_date:dt.toISOString().slice(0,10),time:dt.toTimeString().slice(0,5),num_sessions:act.num,duration_minutes:act.dur}); setCtx(v=>({...v,lastClient:act.client})); return {text:`✅ ${r.message}\n📅 **${act.client.name}** — ${act.rec} from ${dt.toLocaleDateString('en-IN',{weekday:'long',month:'short',day:'numeric'})} at ${dt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}`,actions:[{label:'Schedule',tab:'schedule'}]}; } catch(e) { return {text:`❌ ${e.message}`}; } }
+      if (act.type==='confirm_del') { if(p.includes('yes')||p.includes('ok')||p.includes('sure')||p.includes('confirm')){try{if(act.ent==='client')await api.deleteClient(act.id);else if(act.ent==='workout')await api.deleteWorkout(act.id);else await api.deleteSession(act.id);return{text:`✅ ${act.ent} **${act.name}** deleted.`};}catch(e){return{text:`❌ ${e.message}`};}} return {text:'Cancelled.'}; }
+    }
 
     try {
-      // ---- ADD CLIENT ----
-      const addClientMatch = p.match(/(?:add|create|new)\s+(?:a\s+)?client\s+(?:named?\s+)?(.+)/i);
-      if (addClientMatch) {
-        const parts = addClientMatch[1];
-        const nameMatch = parts.match(/^([a-zA-Z\s]+?)(?:,|\s+(?:phone|email|mobile|number|with))/i) || [null, parts.split(',')[0].trim()];
-        const name = nameMatch[1].trim();
-        const phoneMatch = parts.match(/(?:phone|mobile|number|ph)[:\s]*([+\d\s-]+)/i) || parts.match(/(\d{10,})/);
-        const emailMatch = parts.match(/(?:email)[:\s]*(\S+@\S+)/i) || parts.match(/(\S+@\S+\.\S+)/);
-        const res = await api.createClient({ name, phone: phoneMatch?.[1]?.trim(), email: emailMatch?.[1]?.trim() });
-        return { text: `✅ Client **${name}** added successfully!${phoneMatch ? ` Phone: ${phoneMatch[1].trim()}` : ''}${emailMatch ? ` Email: ${emailMatch[1].trim()}` : ''}`, actions: [{ label: 'View Clients', tab: 'clients' }] };
+      // ---- BULK ADD CLIENTS ----
+      if (p.match(/bulk\s+(?:add|import|create)\s+client/i)) {
+        const after = prompt.split(/:\s*/)[1] || prompt.split(/clients?\s+/i).pop();
+        const entries = after.split(/[,;\n]+/).map(e=>e.trim()).filter(Boolean);
+        if (entries.length<2) return {text:'Format: **bulk add clients: Rahul 9876543210, Priya 9123456789, Amit amit@email.com**'};
+        const cls = entries.map(e=>{const ph=e.match(/(\d{10,})/);const em=e.match(/(\S+@\S+\.\S+)/);return{name:e.replace(/\d{10,}/g,'').replace(/\S+@\S+\.\S+/g,'').replace(/[,;]/g,'').trim()||'Unknown',phone:ph?.[1],email:em?.[1]};});
+        const r=await api.bulkImportClients({clients:cls});
+        return {text:`✅ ${r.message}\n\n${cls.map(c=>`• **${c.name}**${c.phone?' — '+c.phone:''}${c.email?' — '+c.email:''}`).join('\n')}`,actions:[{label:'Clients',tab:'clients'}]};
       }
 
-      // ---- LIST/SHOW CLIENTS ----
-      if (p.match(/(?:show|list|get|view|all)\s+(?:my\s+)?clients/i) || p === 'clients') {
-        const res = await api.getClients();
-        const clients = res.clients || [];
-        if (!clients.length) return { text: 'You don\'t have any clients yet. Say "add a client named [name]" to get started!' };
-        const list = clients.slice(0, 15).map(c => `• **${c.name}**${c.phone ? ` — ${c.phone}` : ''}${c.email ? ` — ${c.email}` : ''}`).join('\n');
-        return { text: `📋 Your clients (${clients.length}):\n\n${list}${clients.length > 15 ? `\n\n...and ${clients.length - 15} more` : ''}`, actions: [{ label: 'Manage Clients', tab: 'clients' }] };
+      // ---- ADD CLIENT ----
+      if (p.match(/(?:add|create|new)\s+(?:a\s+)?client\s+/i)) {
+        const parts=p.replace(/(?:add|create|new)\s+(?:a\s+)?client\s+(?:named?\s+)?/i,'');
+        const ph=parts.match(/(\+?\d[\d\s-]{8,})/);const em=parts.match(/(\S+@\S+\.\S+)/);
+        let name=parts.replace(/(\+?\d[\d\s-]{8,})/g,'').replace(/\S+@\S+\.\S+/g,'').replace(/,?\s*(phone|mobile|email|ph|number)[:\s]*/gi,'').trim();
+        if(!name)return{text:'Need a name. Try: "add client Rahul, phone 9876543210"'};
+        if(!ph){setPendingAction({type:'client_phone',name,email:em?.[1]});return{text:`Adding **${name}**.\n\n📱 What's their **phone number**? (needed for WhatsApp)`};}
+        const r=await api.createClient({name,phone:ph[1].replace(/[\s-]/g,''),email:em?.[1]}); setCtx(v=>({...v,lastClient:r.client}));
+        return{text:`✅ **${name}** added!\nPhone: ${ph[1]}${em?'\nEmail: '+em[1]:''}\n\nSchedule a session? Say "schedule them tomorrow at 10am"`};
       }
+
+      // ---- SHOW CLIENTS ----
+      if(p.match(/(?:show|list|get|view|all|my)\s*(?:my\s+)?client/i)||p==='clients'){const r=await api.getClients();const cl=r.clients||[];if(!cl.length)return{text:'No clients yet. "add client Rahul, phone 9876543210"'};return{text:`📋 **Clients (${cl.length}):**\n\n${cl.slice(0,20).map(c=>`• **${c.name}**${c.phone?' — '+c.phone:''}${c.email?' — '+c.email:''}`).join('\n')}`,actions:[{label:'Clients',tab:'clients'}]};}
 
       // ---- DELETE CLIENT ----
-      const delClientMatch = p.match(/(?:delete|remove)\s+(?:the\s+)?client\s+(?:named?\s+)?(.+)/i);
-      if (delClientMatch) {
-        const name = delClientMatch[1].trim().replace(/["']/g, '');
-        const res = await api.getClients();
-        const client = (res.clients || []).find(c => c.name.toLowerCase().includes(name.toLowerCase()));
-        if (!client) return { text: `❌ No client found matching "${name}". Say "show clients" to see your list.` };
-        await api.deleteClient(client.id);
-        return { text: `✅ Client **${client.name}** has been deleted.` };
+      if(p.match(/(?:delete|remove)\s+(?:the\s+)?client/i)){const name=p.replace(/(?:delete|remove)\s+(?:the\s+)?client\s+(?:named?\s+)?/i,'').replace(/["']/g,'').trim();const cl=await findClient(name);if(!cl)return{text:`❌ "${name}" not found.`};setPendingAction({type:'confirm_del',ent:'client',id:cl.id,name:cl.name});return{text:`⚠️ Delete **${cl.name}** and all their data?\nType **yes** to confirm.`};}
+
+      // ---- ADD WORKOUT (with optional client tag) ----
+      if(p.match(/(?:add|create|new)\s+(?:a\s+)?workout/i)){
+        const parts=p.replace(/(?:add|create|new)\s+(?:a\s+)?workout\s+(?:called|named)?\s*/i,'');
+        const nm=(parts.match(/^(.+?)(?:,|\s+(?:for|and|cat|type|dur|\d+\s*min))/i)||[null,parts.split(',')[0]])[1].trim().replace(/["']/g,'');
+        const cat=(parts.match(/(?:cat|type)[:\s]*(strength|cardio|hiit|yoga|pilates|gym|education|music|general)/i)||[])[1]||'strength';
+        const dur=(parts.match(/(\d+)\s*min/i)||[])[1];
+        const clientTag=(parts.match(/(?:for|tag|assign)\s+(?:to\s+)?(.+?)(?:\s*$|,)/i)||[])[1];
+        if(!dur){setPendingAction({type:'workout_dur',name:nm,category:cat,clientTag});return{text:`Creating **${nm}** (${cat}).\n\n⏱️ Duration in **minutes**? (e.g. 30, 45, 60)`};}
+        const r=await api.createWorkout({name:nm,category:cat,duration_minutes:parseInt(dur)});setCtx(v=>({...v,lastWorkout:r.workout}));
+        let extra='';if(clientTag){const cl=await findClient(clientTag);if(cl){const d=new Date();d.setDate(d.getDate()+1);d.setHours(10,0,0,0);await api.createSession({client_id:cl.id,scheduled_at:d.toISOString().slice(0,16),duration_minutes:parseInt(dur),workout_id:r.workout.id});extra=`\n📌 Assigned to **${cl.name}** tomorrow!`;setCtx(v=>({...v,lastClient:cl}));}}
+        return{text:`✅ **${nm}** (${cat}, ${dur}min) created!${extra}`,actions:[{label:'Workouts',tab:'workouts'}]};
       }
 
-      // ---- ADD WORKOUT ----
-      const addWorkoutMatch = p.match(/(?:add|create|new)\s+(?:a\s+)?workout\s+(?:called|named)?\s*(.+)/i);
-      if (addWorkoutMatch) {
-        const parts = addWorkoutMatch[1];
-        const name = parts.split(/[,\-]/)[0].trim().replace(/["']/g, '');
-        const catMatch = parts.match(/(?:category|type)[:\s]*(strength|cardio|hiit|yoga|pilates|gym)/i);
-        const durMatch = parts.match(/(\d+)\s*(?:min|minutes)/i);
-        const res = await api.createWorkout({ name, category: catMatch?.[1] || 'strength', duration_minutes: durMatch ? parseInt(durMatch[1]) : 30, description: '' });
-        return { text: `✅ Workout **${name}** created!${catMatch ? ` Category: ${catMatch[1]}` : ''}${durMatch ? ` Duration: ${durMatch[1]} min` : ''}`, actions: [{ label: 'View Workouts', tab: 'workouts' }] };
-      }
-
-      // ---- LIST WORKOUTS ----
-      if (p.match(/(?:show|list|get|view|all)\s+(?:my\s+)?workouts/i) || p === 'workouts') {
-        const res = await api.getWorkouts();
-        const wk = res.workouts || [];
-        if (!wk.length) return { text: 'No workouts yet. Say "add a workout called [name]" to create one!' };
-        const list = wk.slice(0, 15).map(w => `• **${w.name}**${w.category ? ` (${w.category})` : ''}${w.duration_minutes ? ` — ${w.duration_minutes}min` : ''}`).join('\n');
-        return { text: `🏋️ Your workouts (${wk.length}):\n\n${list}`, actions: [{ label: 'Manage Workouts', tab: 'workouts' }] };
-      }
+      // ---- SHOW WORKOUTS ----
+      if(p.match(/(?:show|list|get|view|all|my)\s*(?:my\s+)?workout/i)||p==='workouts'){const r=await api.getWorkouts();const wk=r.workouts||[];if(!wk.length)return{text:'No workouts yet. "add workout Leg Day, 45 min, strength"'};return{text:`🏋️ **Workouts (${wk.length}):**\n\n${wk.slice(0,20).map(w=>`• **${w.name}** (${w.category||'general'}) — ${w.duration_minutes||30}min`).join('\n')}`,actions:[{label:'Workouts',tab:'workouts'}]};}
 
       // ---- DELETE WORKOUT ----
-      const delWorkoutMatch = p.match(/(?:delete|remove)\s+(?:the\s+)?workout\s+(?:called|named)?\s*(.+)/i);
-      if (delWorkoutMatch) {
-        const name = delWorkoutMatch[1].trim().replace(/["']/g, '');
-        const res = await api.getWorkouts();
-        const wk = (res.workouts || []).find(w => w.name.toLowerCase().includes(name.toLowerCase()));
-        if (!wk) return { text: `❌ No workout found matching "${name}".` };
-        await api.deleteWorkout(wk.id);
-        return { text: `✅ Workout **${wk.name}** deleted.` };
+      if(p.match(/(?:delete|remove)\s+(?:the\s+)?workout/i)){const name=p.replace(/(?:delete|remove)\s+(?:the\s+)?workout\s+(?:called|named)?\s*/i,'').replace(/["']/g,'').trim();const wk=await findWorkout(name);if(!wk)return{text:`❌ "${name}" not found.`};setPendingAction({type:'confirm_del',ent:'workout',id:wk.id,name:wk.name});return{text:`⚠️ Delete **${wk.name}**? Type **yes**.`};}
+
+      // ---- MARK ATTENDANCE ----
+      if(p.match(/mark\s+(.+?)\s+(?:as\s+)?(?:present|attended|absent|no.?show)/i)){
+        const m=p.match(/mark\s+(.+?)\s+(?:as\s+)?(?:present|attended|absent|no.?show)/i);
+        const status=p.includes('absent')||p.includes('no show')?'absent':'attended';
+        const cl=await findClient(m[1].trim());if(!cl)return{text:`❌ "${m[1].trim()}" not found.`};
+        const today=await api.getTodaySchedule();const sess=(today.sessions||[]).find(s=>s.client_id===cl.id&&(s.status==='scheduled'||s.status==='confirmed'));
+        if(!sess){const any=(today.sessions||[]).find(s=>s.client_id===cl.id);if(any)return{text:`⚠️ ${cl.name}'s session already **${any.status}**.`};return{text:`❌ No session for **${cl.name}** today.`};}
+        await api.markAttendance(sess.id,status);
+        return{text:`✅ **${cl.name}** — ${status==='attended'?'**Present ✓**':'**Absent ✗**'}`,actions:[{label:'Today',tab:'today'}]};
       }
 
-      // ---- SCHEDULE SESSION ----
-      const scheduleMatch = p.match(/(?:schedule|book|plan|set)\s+(?:a\s+)?(?:session|workout|training)?\s*(?:for|with)\s+(.+)/i);
-      if (scheduleMatch) {
-        const parts = scheduleMatch[1];
-        const clientRes = await api.getClients();
-        const clients = clientRes.clients || [];
-        let matchedClient = null;
-        for (const c of clients) {
-          if (parts.toLowerCase().includes(c.name.toLowerCase())) { matchedClient = c; break; }
-        }
-        if (!matchedClient) return { text: `❌ Couldn't find the client. Your clients: ${clients.map(c => c.name).join(', ') || 'none'}. Try: "schedule a session for [exact name] tomorrow at 10am"` };
+      // ---- SCHEDULE (single + recurring) ----
+      if(p.match(/(?:schedule|book|plan|set)\s+(?:a\s+)?(?:session|workout|training|class)?\s*(?:for|with)\s+/i)||p.match(/^(?:schedule|book)\s+(?:them|him|her)/i)){
+        let parts=p.replace(/(?:schedule|book|plan|set)\s+(?:a\s+)?(?:session|workout|training|class)?\s*(?:for|with)\s+/i,'');
+        const cRes=await api.getClients();const clients=cRes.clients||[];
+        let client=null;for(const c of clients){if(parts.toLowerCase().includes(c.name.toLowerCase())){client=c;break;}}
+        if(!client&&(p.includes('them')||p.includes('him')||p.includes('her'))&&ctx.lastClient)client=ctx.lastClient;
+        if(!client)return{text:`❌ Client not found. Clients: ${clients.map(c=>c.name).join(', ')||'none'}`};
 
-        // Parse date/time
-        let dt = new Date();
-        if (p.includes('tomorrow')) { dt.setDate(dt.getDate() + 1); }
-        else if (p.match(/next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i)) {
-          const days = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
-          const target = days.indexOf(p.match(/next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i)[1].toLowerCase());
-          while (dt.getDay() !== target || dt.toDateString() === new Date().toDateString()) dt.setDate(dt.getDate() + 1);
-        }
-        const timeMatch = parts.match(/(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
-        if (timeMatch) {
-          let h = parseInt(timeMatch[1]);
-          const m = parseInt(timeMatch[2] || '0');
-          if (timeMatch[3].toLowerCase() === 'pm' && h < 12) h += 12;
-          if (timeMatch[3].toLowerCase() === 'am' && h === 12) h = 0;
-          dt.setHours(h, m, 0, 0);
-        } else { dt.setHours(10, 0, 0, 0); }
+        const wRes=await api.getWorkouts();let workout=null;for(const w of(wRes.workouts||[])){if(parts.toLowerCase().includes(w.name.toLowerCase())){workout=w;break;}}
+        if(!workout)workout=ctx.lastWorkout;
+        const durM=parts.match(/(\d+)\s*min/i);const dur=durM?parseInt(durM[1]):60;
 
-        const durMatch = parts.match(/(\d+)\s*(?:min|minutes|hrs?|hours?)/i);
-        const dur = durMatch ? parseInt(durMatch[1]) : 60;
-
-        // Check for workout
-        const wkRes = await api.getWorkouts();
-        let matchedWorkout = null;
-        for (const w of (wkRes.workouts || [])) {
-          if (parts.toLowerCase().includes(w.name.toLowerCase())) { matchedWorkout = w; break; }
+        // Recurring?
+        const recM=p.match(/(daily|weekly|biweekly|weekdays|daily\s+(?:without|skip|no)\s+weekends?)/i);
+        if(recM){
+          let rec=recM[1].toLowerCase();if(rec.includes('weekday')||rec.includes('without')||rec.includes('skip'))rec='daily';
+          const numM=parts.match(/(\d+)\s*(?:sessions|times|classes)/i);const num=numM?parseInt(numM[1]):(rec==='daily'?20:8);
+          const hasTime=parts.match(/\d{1,2}\s*(am|pm)/i);const hasDate=parts.match(/start|from|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}[\/\-]/i);
+          if(!hasTime&&!hasDate){setPendingAction({type:'recur_time',client,rec,num,dur,workout});return{text:`Setting **${rec}** sessions for **${client.name}**${workout?` (${workout.name})`:''}, ${num} sessions, ${dur}min each.\n\n📅 Start when? (e.g. "tomorrow at 10am", "Monday 6pm")`};}
+          const dt=parseDate(parts);
+          try{const r=await api.createRecurringSessions({client_id:client.id,recurrence_type:rec,start_date:dt.toISOString().slice(0,10),time:dt.toTimeString().slice(0,5),num_sessions:num,duration_minutes:dur});setCtx(v=>({...v,lastClient:client}));return{text:`✅ ${r.message}\n📅 **${client.name}** — ${rec} from ${dt.toLocaleDateString('en-IN',{weekday:'long',month:'short',day:'numeric'})} at ${dt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}${workout?'\n🏋️ '+workout.name:''}`,actions:[{label:'Schedule',tab:'schedule'}]};}catch(e){return{text:`❌ ${e.message}`};}
         }
 
-        const scheduled_at = dt.toISOString().slice(0, 16);
-        await api.createSession({ client_id: matchedClient.id, scheduled_at, duration_minutes: dur, workout_id: matchedWorkout?.id || null });
-        return { text: `✅ Session scheduled!\n\n📅 **${matchedClient.name}**\n🕐 ${dt.toLocaleDateString('en-IN', { weekday: 'long', month: 'short', day: 'numeric' })} at ${dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${matchedWorkout ? `\n🏋️ ${matchedWorkout.name}` : ''}\n⏱️ ${dur} minutes`, actions: [{ label: 'View Schedule', tab: 'schedule' }] };
+        // Single
+        const hasTime=parts.match(/\d{1,2}\s*(am|pm)/i);const hasDate=parts.match(/tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}[\/\-]/i);
+        if(!hasTime&&!hasDate){setPendingAction({type:'sched_time',client,workout,dur});return{text:`Scheduling **${client.name}**${workout?` (${workout.name})`:''}, ${dur}min.\n\n🕐 When? (e.g. "tomorrow at 10am")`};}
+        const dt=parseDate(parts);
+        try{await api.createSession({client_id:client.id,scheduled_at:dt.toISOString().slice(0,16),duration_minutes:dur,workout_id:workout?.id});setCtx(v=>({...v,lastClient:client}));return{text:`✅ **${client.name}** — ${dt.toLocaleDateString('en-IN',{weekday:'short',month:'short',day:'numeric'})} at ${dt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}${workout?'\n🏋️ '+workout.name:''}\n⏱️ ${dur}min`,actions:[{label:'Schedule',tab:'schedule'}]};}catch(e){return{text:`❌ ${e.message}`};}
       }
 
-      // ---- SHOW SESSIONS / TODAY ----
-      if (p.match(/(?:show|list|what|get)\s+(?:is\s+)?(?:my\s+)?(?:today|schedule|sessions)/i) || p === 'today') {
-        const res = await api.getTodaySchedule();
-        const sess = res.sessions || [];
-        if (!sess.length) return { text: 'No sessions scheduled for today. Say "schedule a session for [client] tomorrow at [time]" to plan one!', actions: [{ label: 'Go to Planner', tab: 'schedule' }] };
-        const list = sess.map(s => {
-          const t = new Date(s.scheduled_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-          return `• ${t} — **${s.client_name}** ${s.workout_name ? `(${s.workout_name})` : ''} — ${s.status}`;
-        }).join('\n');
-        return { text: `📅 Today's schedule (${sess.length} sessions):\n\n${list}`, actions: [{ label: 'Today View', tab: 'today' }] };
+      // ---- TODAY ----
+      if(p.match(/(?:show|list|what|get|today|my)\s*(?:'s|is)?\s*(?:my\s+)?(?:today|schedule|session|class)/i)||p==='today'){
+        const r=await api.getTodaySchedule();const sess=r.sessions||[];if(!sess.length)return{text:'No sessions today.',actions:[{label:'Plan',tab:'schedule'}]};
+        const st={scheduled:'⏳',confirmed:'✅',completed:'✅',cancelled:'❌',no_show:'❌',in_progress:'▶️'};
+        return{text:`📅 **Today (${sess.length}):**\n\n${sess.map(s=>`${st[s.status]||'⏳'} ${new Date(s.scheduled_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} — **${s.client_name}** ${s.workout_name?'('+s.workout_name+')':''} — ${s.status}`).join('\n')}\n\n"mark [name] as present" to record attendance.`,actions:[{label:'Today',tab:'today'}]};
       }
 
-      // ---- SEND REMINDER ----
-      const reminderMatch = p.match(/(?:send|trigger)\s+(?:a\s+)?(?:whatsapp|wa|email|reminder)\s+(?:reminder\s+)?(?:to|for)\s+(.+)/i);
-      if (reminderMatch) {
-        const name = reminderMatch[1].trim().replace(/["']/g, '');
-        const method = p.includes('email') ? 'email' : 'whatsapp';
-        const clientRes = await api.getClients();
-        const client = (clientRes.clients || []).find(c => c.name.toLowerCase().includes(name.toLowerCase()));
-        if (!client) return { text: `❌ Client "${name}" not found.` };
-        const res = await api.sendPersonalReminder({ client_id: client.id, method });
-        if (res.success && res.link) {
-          window.open(res.link, '_blank');
-          return { text: `✅ ${method === 'whatsapp' ? 'WhatsApp' : 'Email'} opened for **${client.name}**!` };
-        }
-        return { text: `❌ ${res.message || 'Failed to send reminder'}` };
-      }
+      // ---- REMINDERS ----
+      if(p.match(/(?:send|trigger)\s+(?:a\s+)?(?:whatsapp|wa|email|reminder)/i)){const nm=(p.match(/(?:to|for)\s+(.+?)(?:\s*$)/i)||[])[1];if(!nm)return{text:'Who to? "send WhatsApp reminder to Rahul"'};const cl=await findClient(nm.trim().replace(/["']/g,''));if(!cl)return{text:`❌ "${nm}" not found.`};const method=p.includes('email')?'email':'whatsapp';const r=await api.sendPersonalReminder({client_id:cl.id,method});if(r.success&&r.link){window.open(r.link,'_blank');return{text:`✅ ${method==='whatsapp'?'WhatsApp':'Email'} opened for **${cl.name}**!`};}return{text:`❌ ${r.message||'Failed'}`};}
 
-      // ---- PAYMENT LINK ----
-      const paymentMatch = p.match(/(?:create|send|make|generate)\s+(?:a\s+)?payment\s+(?:link\s+)?(?:for|to)\s+(.+)/i);
-      if (paymentMatch) {
-        const parts = paymentMatch[1];
-        const amountMatch = parts.match(/(?:rs\.?|₹|rupees?|inr)?\s*(\d+(?:,\d+)*)/i) || parts.match(/(\d{3,})/);
-        const clientRes = await api.getClients();
-        const clients = clientRes.clients || [];
-        let matchedClient = null;
-        for (const c of clients) {
-          if (parts.toLowerCase().includes(c.name.toLowerCase())) { matchedClient = c; break; }
-        }
-        if (!matchedClient) return { text: `❌ Client not found. Your clients: ${clients.map(c => c.name).join(', ') || 'none'}` };
-        if (!amountMatch) return { text: `❌ Please specify the amount. Try: "create payment link for ${matchedClient.name} for 2000 rupees"` };
-        const amount = parseInt(amountMatch[1].replace(/,/g, ''));
-        const res = await api.createPaymentLink({ client_id: matchedClient.id, amount });
-        if (res.success) return { text: `✅ Payment link created!\n\n💰 **${matchedClient.name}** — ₹${amount.toLocaleString()}\n🔗 ${res.payment_link}\n\n${res.mode === 'demo' ? '⚠️ Demo mode — set Razorpay keys for real links' : ''}`, actions: [{ label: 'Payments Tab', tab: 'payments' }] };
-        return { text: '❌ Failed to create payment link' };
-      }
+      // ---- PAYMENT ----
+      if(p.match(/(?:create|send|make|generate)\s+(?:a\s+)?payment/i)){const amt=(prompt.match(/(\d[\d,]*)/)||[])[1];const cRes=await api.getClients();let cl=null;for(const c of(cRes.clients||[])){if(prompt.toLowerCase().includes(c.name.toLowerCase())){cl=c;break;}}if(!cl)cl=ctx.lastClient;if(!cl)return{text:'Which client? "create payment link for Rahul 2000"'};if(!amt)return{text:`How much for **${cl.name}**? (e.g. "2000")`};const a=parseInt(amt.replace(/,/g,''));const r=await api.createPaymentLink({client_id:cl.id,amount:a});return r.success?{text:`✅ **${cl.name}** — ₹${a.toLocaleString()}\n🔗 ${r.payment_link}${r.mode==='demo'?'\n⚠️ Demo':''}`,actions:[{label:'Payments',tab:'payments'}]}:{text:'❌ Failed'};}
 
-      // ---- STATS / DASHBOARD ----
-      if (p.match(/(?:show|get|my)\s+(?:stats|dashboard|overview|summary)/i) || p === 'stats' || p === 'dashboard') {
-        const res = await api.getDashboardStats();
-        const s = res.stats || {};
-        return { text: `📊 **Your Dashboard**\n\n👥 Clients: **${s.total_clients || 0}**\n📅 Total Sessions: **${s.total_sessions || 0}**\n✅ Completed: **${s.completed_sessions || 0}**\n🏋️ Workouts: **${s.total_workouts || 0}**`, actions: [{ label: 'Full Dashboard', tab: 'dashboard' }] };
-      }
+      // ---- STATS ----
+      if(p.match(/(?:show|get|my)\s*(?:stats|dashboard|overview|summary)/i)||p==='stats'||p==='dashboard'){const r=await api.getDashboardStats();const s=r.stats||{};return{text:`📊 **Dashboard**\n\n👥 Clients: **${s.total_clients||0}**\n📅 Sessions: **${s.total_sessions||0}**\n✅ Completed: **${s.completed_sessions||0}**\n🏋️ Workouts: **${s.total_workouts||0}**`,actions:[{label:'Dashboard',tab:'dashboard'}]};}
 
       // ---- HELP ----
-      if (p.match(/^(?:help|what can you do|commands|options)/i)) {
-        return { text: `Here's what I can do:\n\n**Clients:**\n• "Add a client named Rahul, phone 9876543210"\n• "Show my clients"\n• "Delete client Rahul"\n\n**Workouts:**\n• "Add a workout called Leg Day, category strength, 45 min"\n• "Show my workouts"\n• "Delete workout Leg Day"\n\n**Sessions:**\n• "Schedule a session for Rahul tomorrow at 10am"\n• "What's my schedule today"\n\n**Reminders:**\n• "Send WhatsApp reminder to Rahul"\n• "Send email reminder to Priya"\n\n**Payments:**\n• "Create payment link for Rahul for 2000 rupees"\n\n**Stats:**\n• "Show my stats"` };
-      }
+      if(p.match(/^(?:help|what can|commands|options|how)/i))return{text:`**📋 All Commands:**\n\n**Clients:**\n• "Add client Rahul, phone 9876543210"\n• "Bulk add clients: Rahul 9876543210, Priya 9123456789"\n• "Show clients" / "Delete client Rahul"\n\n**Workouts:**\n• "Add workout Leg Day, 45 min, strength"\n• "Add workout Yoga Flow, 30 min for Priya" (create+assign)\n• "Show workouts" / "Delete workout Leg Day"\n\n**Scheduling:**\n• "Schedule Rahul tomorrow at 10am"\n• "Schedule Priya weekly starting Monday 6pm"\n• "Schedule Rahul daily without weekends, 20 sessions"\n\n**Attendance:**\n• "Mark Rahul as present" / "Mark Priya as absent"\n\n**Reminders:** "Send WhatsApp reminder to Rahul"\n**Payments:** "Create payment link for Rahul 2000"\n**Stats:** "Show my stats"\n\n💡 I remember context! After adding a client, say "schedule them tomorrow"`};
 
-      // ---- FALLBACK ----
-      return { text: `🤔 I didn't quite understand that. Try something like:\n\n• "Add a client named [name]"\n• "Schedule a session for [client] tomorrow at 10am"\n• "Show my clients"\n• "Send WhatsApp reminder to [client]"\n\nOr say **"help"** to see all commands.` };
+      // ---- CONTEXT: schedule them ----
+      if(p.match(/^(?:schedule|book)\s+(?:them|him|her)/i)&&ctx.lastClient){setPendingAction({type:'sched_time',client:ctx.lastClient,workout:ctx.lastWorkout,dur:60});return{text:`Scheduling **${ctx.lastClient.name}**${ctx.lastWorkout?' ('+ctx.lastWorkout.name+')':''}.\n\n🕐 When?`};}
 
-    } catch (error) {
-      return { text: `❌ Error: ${error.message}\n\nPlease try again or rephrase your request.` };
-    }
+      return{text:`🤔 Try:\n• "Add client [name], phone [number]"\n• "Schedule [client] tomorrow at 10am"\n• "Mark [client] as present"\n• "Show clients" / "Show stats"\n\nType **help** for all commands.`};
+    } catch(error){return{text:`❌ Error: ${error.message}`};}
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!input.trim() || loading) return;
-    const userMsg = input.trim();
-    setInput('');
-    setMessages(prev => [...prev, { role: 'user', text: userMsg }]);
-    setLoading(true);
-    const result = await parseAndExecute(userMsg);
-    setMessages(prev => [...prev, { role: 'ai', ...result }]);
-    setLoading(false);
-    inputRef.current?.focus();
-  };
-
-  const handleAction = (action) => {
-    if (action.tab) {
-      const evt = new CustomEvent('navigate-tab', { detail: action.tab });
-      window.dispatchEvent(evt);
-    }
-  };
-
-  const formatText = (text) => {
-    return text.split('\n').map((line, i) => {
-      const formatted = line.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-      return <div key={i} dangerouslySetInnerHTML={{ __html: formatted || '&nbsp;' }} />;
-    });
-  };
-
-  const quickPrompts = [
-    'Show my clients', 'What\'s my schedule today', 'Show my stats',
-    'Show my workouts', 'Help'
-  ];
+  const handleSubmit = async (e) => { e.preventDefault();if(!input.trim()||loading)return;const m=input.trim();setInput('');setMessages(p=>[...p,{role:'user',text:m}]);setLoading(true);const r=await exec(m);setMessages(p=>[...p,{role:'ai',...r}]);setLoading(false);inputRef.current?.focus(); };
+  const handleAction = (a) => { if(a.tab)window.dispatchEvent(new CustomEvent('navigate-tab',{detail:a.tab})); };
+  const fmt = (text) => text.split('\n').map((l,i) => <div key={i} dangerouslySetInnerHTML={{__html:l.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')||'&nbsp;'}} />);
+  const qp = ['Show my clients','Today\'s schedule','Show my stats','Show workouts','Help'];
 
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)]">
       <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center"><Sparkles size={20} className="text-white" /></div>
-          <div><h1 className="text-xl font-bold">AI Coach Assistant</h1><p className="text-xs text-slate-500">Manage everything with natural language</p></div>
-        </div>
+        <div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center"><Sparkles size={20} className="text-white" /></div><div><h1 className="text-xl font-bold">AI Coach Assistant</h1><p className="text-xs text-slate-500">Context-aware — I remember our conversation!</p></div></div>
+        <button onClick={()=>{setMessages([messages[0]]);setPendingAction(null);setCtx({lastClient:null,lastWorkout:null});}} className="px-3 py-1.5 text-xs bg-slate-100 rounded-lg hover:bg-slate-200 font-medium">Clear Chat</button>
       </div>
-
       <div className="flex-1 overflow-y-auto space-y-4 pb-4 pr-1">
-        {messages.map((msg, i) => (
-          <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[85%] rounded-2xl px-5 py-3.5 ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-white border shadow-sm'}`}>
-              <div className={`text-sm leading-relaxed ${msg.role === 'user' ? 'text-white' : 'text-slate-700'}`}>
-                {formatText(msg.text)}
-              </div>
-              {msg.actions && (
-                <div className="flex flex-wrap gap-2 mt-3">
-                  {msg.actions.map((a, j) => (
-                    <button key={j} onClick={() => handleAction(a)} className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-semibold hover:bg-blue-100 border border-blue-200">
-                      {a.label} →
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
-        {loading && (
-          <div className="flex justify-start"><div className="bg-white border rounded-2xl px-5 py-3.5 shadow-sm"><div className="flex items-center gap-2 text-sm text-slate-500"><Loader size={16} className="animate-spin" /> Thinking...</div></div></div>
-        )}
+        {messages.map((msg,i) => (<div key={i} className={`flex ${msg.role==='user'?'justify-end':'justify-start'}`}><div className={`max-w-[85%] rounded-2xl px-5 py-3.5 ${msg.role==='user'?'bg-blue-600 text-white':'bg-white border shadow-sm'}`}><div className={`text-sm leading-relaxed ${msg.role==='user'?'text-white':'text-slate-700'}`}>{fmt(msg.text)}</div>{msg.actions&&<div className="flex flex-wrap gap-2 mt-3">{msg.actions.map((a,j)=><button key={j} onClick={()=>handleAction(a)} className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-semibold hover:bg-blue-100 border border-blue-200">{a.label} →</button>)}</div>}</div></div>))}
+        {loading&&<div className="flex justify-start"><div className="bg-white border rounded-2xl px-5 py-3.5 shadow-sm"><div className="flex items-center gap-2 text-sm text-slate-500"><Loader size={16} className="animate-spin" /> Working...</div></div></div>}
         <div ref={bottomRef} />
       </div>
-
-      {messages.length <= 1 && (
-        <div className="flex flex-wrap gap-2 mb-3">
-          {quickPrompts.map((qp, i) => (
-            <button key={i} onClick={() => { setInput(qp); }} className="px-3 py-2 bg-white border rounded-xl text-sm text-slate-600 hover:bg-slate-50 hover:border-slate-300">{qp}</button>
-          ))}
-        </div>
-      )}
-
+      {messages.length<=1&&<div className="flex flex-wrap gap-2 mb-3">{qp.map((q,i)=><button key={i} onClick={()=>setInput(q)} className="px-3 py-2 bg-white border rounded-xl text-sm text-slate-600 hover:bg-slate-50">{q}</button>)}</div>}
+      {pendingAction&&<div className="mb-2 px-4 py-2 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-700 font-medium">⏳ Waiting for your answer...</div>}
       <form onSubmit={handleSubmit} className="flex gap-3 bg-white rounded-2xl border shadow-sm p-2">
-        <input ref={inputRef} value={input} onChange={e => setInput(e.target.value)} placeholder='Try: "Add a client named Rahul" or "Show my stats"' className="flex-1 px-4 py-3 outline-none text-sm" disabled={loading} />
-        <button type="submit" disabled={loading || !input.trim()} className="px-5 py-3 bg-blue-600 text-white rounded-xl font-bold text-sm disabled:opacity-40 flex items-center gap-2 hover:bg-blue-700">
-          <Send size={16} /> Send
-        </button>
+        <input ref={inputRef} value={input} onChange={e=>setInput(e.target.value)} placeholder={pendingAction?'Type your answer...':'Try: "Add client Rahul, phone 9876543210"'} className="flex-1 px-4 py-3 outline-none text-sm" disabled={loading} />
+        <button type="submit" disabled={loading||!input.trim()} className="px-5 py-3 bg-blue-600 text-white rounded-xl font-bold text-sm disabled:opacity-40 flex items-center gap-2 hover:bg-blue-700"><Send size={16} /> Send</button>
       </form>
     </div>
   );
