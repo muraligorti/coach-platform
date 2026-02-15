@@ -641,3 +641,18 @@ GROUP BY u.id, u.full_name, u.primary_org_id, og.grade_value, og.numeric_score;
 -- ================================================================
 -- END OF SCHEMA
 -- ================================================================
+
+-- Coach feedback/reviews from clients
+CREATE TABLE IF NOT EXISTS coach_reviews (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    coach_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    client_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    client_name VARCHAR(255),
+    client_email VARCHAR(255),
+    rating INT NOT NULL CHECK (rating BETWEEN 1 AND 5),
+    review_text TEXT,
+    is_public BOOLEAN DEFAULT true,
+    is_approved BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_reviews_coach ON coach_reviews(coach_id) WHERE is_public = true;

@@ -3,15 +3,19 @@ import {
   Calendar, Users, TrendingUp, BarChart3, Bell, Menu, X,
   Plus, CheckCircle, Play, Search, Eye, Upload, Camera, ArrowLeft,
   Check, AlertCircle, Zap, Dumbbell, Trash2, Send, DollarSign,
-  MessageCircle, Mail, ExternalLink, Copy, Clock
+  MessageCircle, Mail, ExternalLink, Copy, Clock, Bot, Sparkles, Loader
 } from 'lucide-react';
 
 const API_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL) || 'https://coach-api-1770519048.azurewebsites.net/api/v1';
 
+function getCoachId() { try { return JSON.parse(localStorage.getItem('coach_user') || '{}').id || ''; } catch { return ''; } }
+
 const api = {
   async request(ep, opts = {}) {
     try {
-      const r = await fetch(`${API_URL}${ep}`, { headers: { 'Content-Type': 'application/json' }, ...opts });
+      const coachId = getCoachId();
+      const headers = { 'Content-Type': 'application/json', ...(coachId ? { 'X-Coach-Id': coachId } : {}), ...(opts.headers || {}) };
+      const r = await fetch(`${API_URL}${ep}`, { ...opts, headers });
       const d = await r.json();
       if (!r.ok && !d.success) throw new Error(d.detail || d.message || 'Request failed');
       return d;
@@ -549,6 +553,280 @@ const ProgressView = ({ showToast }) => {
   );
 };
 
+// === AI PROMPT VIEW ===
+const PromptView = ({ showToast }) => {
+  const [messages, setMessages] = useState([{ role: 'ai', text: 'Hi Coach! I\'m your AI assistant. Tell me what you need in plain English.\n\nTry things like:\n• "Add a client named Rahul, phone 9876543210"\n• "Schedule a strength session for Rahul tomorrow at 10am"\n• "Show me all my clients"\n• "Delete the workout called Leg Day"\n• "Send a WhatsApp reminder to Priya"\n• "Create a payment link for Ananya for 2000 rupees"' }]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const bottomRef = useRef(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+  const parseAndExecute = async (prompt) => {
+    const p = prompt.toLowerCase().trim();
+    const coachId = getCoachId();
+    const results = [];
+
+    try {
+      // ---- ADD CLIENT ----
+      const addClientMatch = p.match(/(?:add|create|new)\s+(?:a\s+)?client\s+(?:named?\s+)?(.+)/i);
+      if (addClientMatch) {
+        const parts = addClientMatch[1];
+        const nameMatch = parts.match(/^([a-zA-Z\s]+?)(?:,|\s+(?:phone|email|mobile|number|with))/i) || [null, parts.split(',')[0].trim()];
+        const name = nameMatch[1].trim();
+        const phoneMatch = parts.match(/(?:phone|mobile|number|ph)[:\s]*([+\d\s-]+)/i) || parts.match(/(\d{10,})/);
+        const emailMatch = parts.match(/(?:email)[:\s]*(\S+@\S+)/i) || parts.match(/(\S+@\S+\.\S+)/);
+        const res = await api.createClient({ name, phone: phoneMatch?.[1]?.trim(), email: emailMatch?.[1]?.trim() });
+        return { text: `✅ Client **${name}** added successfully!${phoneMatch ? ` Phone: ${phoneMatch[1].trim()}` : ''}${emailMatch ? ` Email: ${emailMatch[1].trim()}` : ''}`, actions: [{ label: 'View Clients', tab: 'clients' }] };
+      }
+
+      // ---- LIST/SHOW CLIENTS ----
+      if (p.match(/(?:show|list|get|view|all)\s+(?:my\s+)?clients/i) || p === 'clients') {
+        const res = await api.getClients();
+        const clients = res.clients || [];
+        if (!clients.length) return { text: 'You don\'t have any clients yet. Say "add a client named [name]" to get started!' };
+        const list = clients.slice(0, 15).map(c => `• **${c.name}**${c.phone ? ` — ${c.phone}` : ''}${c.email ? ` — ${c.email}` : ''}`).join('\n');
+        return { text: `📋 Your clients (${clients.length}):\n\n${list}${clients.length > 15 ? `\n\n...and ${clients.length - 15} more` : ''}`, actions: [{ label: 'Manage Clients', tab: 'clients' }] };
+      }
+
+      // ---- DELETE CLIENT ----
+      const delClientMatch = p.match(/(?:delete|remove)\s+(?:the\s+)?client\s+(?:named?\s+)?(.+)/i);
+      if (delClientMatch) {
+        const name = delClientMatch[1].trim().replace(/["']/g, '');
+        const res = await api.getClients();
+        const client = (res.clients || []).find(c => c.name.toLowerCase().includes(name.toLowerCase()));
+        if (!client) return { text: `❌ No client found matching "${name}". Say "show clients" to see your list.` };
+        await api.deleteClient(client.id);
+        return { text: `✅ Client **${client.name}** has been deleted.` };
+      }
+
+      // ---- ADD WORKOUT ----
+      const addWorkoutMatch = p.match(/(?:add|create|new)\s+(?:a\s+)?workout\s+(?:called|named)?\s*(.+)/i);
+      if (addWorkoutMatch) {
+        const parts = addWorkoutMatch[1];
+        const name = parts.split(/[,\-]/)[0].trim().replace(/["']/g, '');
+        const catMatch = parts.match(/(?:category|type)[:\s]*(strength|cardio|hiit|yoga|pilates|gym)/i);
+        const durMatch = parts.match(/(\d+)\s*(?:min|minutes)/i);
+        const res = await api.createWorkout({ name, category: catMatch?.[1] || 'strength', duration_minutes: durMatch ? parseInt(durMatch[1]) : 30, description: '' });
+        return { text: `✅ Workout **${name}** created!${catMatch ? ` Category: ${catMatch[1]}` : ''}${durMatch ? ` Duration: ${durMatch[1]} min` : ''}`, actions: [{ label: 'View Workouts', tab: 'workouts' }] };
+      }
+
+      // ---- LIST WORKOUTS ----
+      if (p.match(/(?:show|list|get|view|all)\s+(?:my\s+)?workouts/i) || p === 'workouts') {
+        const res = await api.getWorkouts();
+        const wk = res.workouts || [];
+        if (!wk.length) return { text: 'No workouts yet. Say "add a workout called [name]" to create one!' };
+        const list = wk.slice(0, 15).map(w => `• **${w.name}**${w.category ? ` (${w.category})` : ''}${w.duration_minutes ? ` — ${w.duration_minutes}min` : ''}`).join('\n');
+        return { text: `🏋️ Your workouts (${wk.length}):\n\n${list}`, actions: [{ label: 'Manage Workouts', tab: 'workouts' }] };
+      }
+
+      // ---- DELETE WORKOUT ----
+      const delWorkoutMatch = p.match(/(?:delete|remove)\s+(?:the\s+)?workout\s+(?:called|named)?\s*(.+)/i);
+      if (delWorkoutMatch) {
+        const name = delWorkoutMatch[1].trim().replace(/["']/g, '');
+        const res = await api.getWorkouts();
+        const wk = (res.workouts || []).find(w => w.name.toLowerCase().includes(name.toLowerCase()));
+        if (!wk) return { text: `❌ No workout found matching "${name}".` };
+        await api.deleteWorkout(wk.id);
+        return { text: `✅ Workout **${wk.name}** deleted.` };
+      }
+
+      // ---- SCHEDULE SESSION ----
+      const scheduleMatch = p.match(/(?:schedule|book|plan|set)\s+(?:a\s+)?(?:session|workout|training)?\s*(?:for|with)\s+(.+)/i);
+      if (scheduleMatch) {
+        const parts = scheduleMatch[1];
+        const clientRes = await api.getClients();
+        const clients = clientRes.clients || [];
+        let matchedClient = null;
+        for (const c of clients) {
+          if (parts.toLowerCase().includes(c.name.toLowerCase())) { matchedClient = c; break; }
+        }
+        if (!matchedClient) return { text: `❌ Couldn't find the client. Your clients: ${clients.map(c => c.name).join(', ') || 'none'}. Try: "schedule a session for [exact name] tomorrow at 10am"` };
+
+        // Parse date/time
+        let dt = new Date();
+        if (p.includes('tomorrow')) { dt.setDate(dt.getDate() + 1); }
+        else if (p.match(/next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i)) {
+          const days = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+          const target = days.indexOf(p.match(/next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i)[1].toLowerCase());
+          while (dt.getDay() !== target || dt.toDateString() === new Date().toDateString()) dt.setDate(dt.getDate() + 1);
+        }
+        const timeMatch = parts.match(/(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
+        if (timeMatch) {
+          let h = parseInt(timeMatch[1]);
+          const m = parseInt(timeMatch[2] || '0');
+          if (timeMatch[3].toLowerCase() === 'pm' && h < 12) h += 12;
+          if (timeMatch[3].toLowerCase() === 'am' && h === 12) h = 0;
+          dt.setHours(h, m, 0, 0);
+        } else { dt.setHours(10, 0, 0, 0); }
+
+        const durMatch = parts.match(/(\d+)\s*(?:min|minutes|hrs?|hours?)/i);
+        const dur = durMatch ? parseInt(durMatch[1]) : 60;
+
+        // Check for workout
+        const wkRes = await api.getWorkouts();
+        let matchedWorkout = null;
+        for (const w of (wkRes.workouts || [])) {
+          if (parts.toLowerCase().includes(w.name.toLowerCase())) { matchedWorkout = w; break; }
+        }
+
+        const scheduled_at = dt.toISOString().slice(0, 16);
+        await api.createSession({ client_id: matchedClient.id, scheduled_at, duration_minutes: dur, workout_id: matchedWorkout?.id || null });
+        return { text: `✅ Session scheduled!\n\n📅 **${matchedClient.name}**\n🕐 ${dt.toLocaleDateString('en-IN', { weekday: 'long', month: 'short', day: 'numeric' })} at ${dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${matchedWorkout ? `\n🏋️ ${matchedWorkout.name}` : ''}\n⏱️ ${dur} minutes`, actions: [{ label: 'View Schedule', tab: 'schedule' }] };
+      }
+
+      // ---- SHOW SESSIONS / TODAY ----
+      if (p.match(/(?:show|list|what|get)\s+(?:is\s+)?(?:my\s+)?(?:today|schedule|sessions)/i) || p === 'today') {
+        const res = await api.getTodaySchedule();
+        const sess = res.sessions || [];
+        if (!sess.length) return { text: 'No sessions scheduled for today. Say "schedule a session for [client] tomorrow at [time]" to plan one!', actions: [{ label: 'Go to Planner', tab: 'schedule' }] };
+        const list = sess.map(s => {
+          const t = new Date(s.scheduled_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          return `• ${t} — **${s.client_name}** ${s.workout_name ? `(${s.workout_name})` : ''} — ${s.status}`;
+        }).join('\n');
+        return { text: `📅 Today's schedule (${sess.length} sessions):\n\n${list}`, actions: [{ label: 'Today View', tab: 'today' }] };
+      }
+
+      // ---- SEND REMINDER ----
+      const reminderMatch = p.match(/(?:send|trigger)\s+(?:a\s+)?(?:whatsapp|wa|email|reminder)\s+(?:reminder\s+)?(?:to|for)\s+(.+)/i);
+      if (reminderMatch) {
+        const name = reminderMatch[1].trim().replace(/["']/g, '');
+        const method = p.includes('email') ? 'email' : 'whatsapp';
+        const clientRes = await api.getClients();
+        const client = (clientRes.clients || []).find(c => c.name.toLowerCase().includes(name.toLowerCase()));
+        if (!client) return { text: `❌ Client "${name}" not found.` };
+        const res = await api.sendPersonalReminder({ client_id: client.id, method });
+        if (res.success && res.link) {
+          window.open(res.link, '_blank');
+          return { text: `✅ ${method === 'whatsapp' ? 'WhatsApp' : 'Email'} opened for **${client.name}**!` };
+        }
+        return { text: `❌ ${res.message || 'Failed to send reminder'}` };
+      }
+
+      // ---- PAYMENT LINK ----
+      const paymentMatch = p.match(/(?:create|send|make|generate)\s+(?:a\s+)?payment\s+(?:link\s+)?(?:for|to)\s+(.+)/i);
+      if (paymentMatch) {
+        const parts = paymentMatch[1];
+        const amountMatch = parts.match(/(?:rs\.?|₹|rupees?|inr)?\s*(\d+(?:,\d+)*)/i) || parts.match(/(\d{3,})/);
+        const clientRes = await api.getClients();
+        const clients = clientRes.clients || [];
+        let matchedClient = null;
+        for (const c of clients) {
+          if (parts.toLowerCase().includes(c.name.toLowerCase())) { matchedClient = c; break; }
+        }
+        if (!matchedClient) return { text: `❌ Client not found. Your clients: ${clients.map(c => c.name).join(', ') || 'none'}` };
+        if (!amountMatch) return { text: `❌ Please specify the amount. Try: "create payment link for ${matchedClient.name} for 2000 rupees"` };
+        const amount = parseInt(amountMatch[1].replace(/,/g, ''));
+        const res = await api.createPaymentLink({ client_id: matchedClient.id, amount });
+        if (res.success) return { text: `✅ Payment link created!\n\n💰 **${matchedClient.name}** — ₹${amount.toLocaleString()}\n🔗 ${res.payment_link}\n\n${res.mode === 'demo' ? '⚠️ Demo mode — set Razorpay keys for real links' : ''}`, actions: [{ label: 'Payments Tab', tab: 'payments' }] };
+        return { text: '❌ Failed to create payment link' };
+      }
+
+      // ---- STATS / DASHBOARD ----
+      if (p.match(/(?:show|get|my)\s+(?:stats|dashboard|overview|summary)/i) || p === 'stats' || p === 'dashboard') {
+        const res = await api.getDashboardStats();
+        const s = res.stats || {};
+        return { text: `📊 **Your Dashboard**\n\n👥 Clients: **${s.total_clients || 0}**\n📅 Total Sessions: **${s.total_sessions || 0}**\n✅ Completed: **${s.completed_sessions || 0}**\n🏋️ Workouts: **${s.total_workouts || 0}**`, actions: [{ label: 'Full Dashboard', tab: 'dashboard' }] };
+      }
+
+      // ---- HELP ----
+      if (p.match(/^(?:help|what can you do|commands|options)/i)) {
+        return { text: `Here's what I can do:\n\n**Clients:**\n• "Add a client named Rahul, phone 9876543210"\n• "Show my clients"\n• "Delete client Rahul"\n\n**Workouts:**\n• "Add a workout called Leg Day, category strength, 45 min"\n• "Show my workouts"\n• "Delete workout Leg Day"\n\n**Sessions:**\n• "Schedule a session for Rahul tomorrow at 10am"\n• "What's my schedule today"\n\n**Reminders:**\n• "Send WhatsApp reminder to Rahul"\n• "Send email reminder to Priya"\n\n**Payments:**\n• "Create payment link for Rahul for 2000 rupees"\n\n**Stats:**\n• "Show my stats"` };
+      }
+
+      // ---- FALLBACK ----
+      return { text: `🤔 I didn't quite understand that. Try something like:\n\n• "Add a client named [name]"\n• "Schedule a session for [client] tomorrow at 10am"\n• "Show my clients"\n• "Send WhatsApp reminder to [client]"\n\nOr say **"help"** to see all commands.` };
+
+    } catch (error) {
+      return { text: `❌ Error: ${error.message}\n\nPlease try again or rephrase your request.` };
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!input.trim() || loading) return;
+    const userMsg = input.trim();
+    setInput('');
+    setMessages(prev => [...prev, { role: 'user', text: userMsg }]);
+    setLoading(true);
+    const result = await parseAndExecute(userMsg);
+    setMessages(prev => [...prev, { role: 'ai', ...result }]);
+    setLoading(false);
+    inputRef.current?.focus();
+  };
+
+  const handleAction = (action) => {
+    if (action.tab) {
+      const evt = new CustomEvent('navigate-tab', { detail: action.tab });
+      window.dispatchEvent(evt);
+    }
+  };
+
+  const formatText = (text) => {
+    return text.split('\n').map((line, i) => {
+      const formatted = line.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      return <div key={i} dangerouslySetInnerHTML={{ __html: formatted || '&nbsp;' }} />;
+    });
+  };
+
+  const quickPrompts = [
+    'Show my clients', 'What\'s my schedule today', 'Show my stats',
+    'Show my workouts', 'Help'
+  ];
+
+  return (
+    <div className="flex flex-col h-[calc(100vh-8rem)]">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center"><Sparkles size={20} className="text-white" /></div>
+          <div><h1 className="text-xl font-bold">AI Coach Assistant</h1><p className="text-xs text-slate-500">Manage everything with natural language</p></div>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto space-y-4 pb-4 pr-1">
+        {messages.map((msg, i) => (
+          <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div className={`max-w-[85%] rounded-2xl px-5 py-3.5 ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-white border shadow-sm'}`}>
+              <div className={`text-sm leading-relaxed ${msg.role === 'user' ? 'text-white' : 'text-slate-700'}`}>
+                {formatText(msg.text)}
+              </div>
+              {msg.actions && (
+                <div className="flex flex-wrap gap-2 mt-3">
+                  {msg.actions.map((a, j) => (
+                    <button key={j} onClick={() => handleAction(a)} className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-semibold hover:bg-blue-100 border border-blue-200">
+                      {a.label} →
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+        {loading && (
+          <div className="flex justify-start"><div className="bg-white border rounded-2xl px-5 py-3.5 shadow-sm"><div className="flex items-center gap-2 text-sm text-slate-500"><Loader size={16} className="animate-spin" /> Thinking...</div></div></div>
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      {messages.length <= 1 && (
+        <div className="flex flex-wrap gap-2 mb-3">
+          {quickPrompts.map((qp, i) => (
+            <button key={i} onClick={() => { setInput(qp); }} className="px-3 py-2 bg-white border rounded-xl text-sm text-slate-600 hover:bg-slate-50 hover:border-slate-300">{qp}</button>
+          ))}
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="flex gap-3 bg-white rounded-2xl border shadow-sm p-2">
+        <input ref={inputRef} value={input} onChange={e => setInput(e.target.value)} placeholder='Try: "Add a client named Rahul" or "Show my stats"' className="flex-1 px-4 py-3 outline-none text-sm" disabled={loading} />
+        <button type="submit" disabled={loading || !input.trim()} className="px-5 py-3 bg-blue-600 text-white rounded-xl font-bold text-sm disabled:opacity-40 flex items-center gap-2 hover:bg-blue-700">
+          <Send size={16} /> Send
+        </button>
+      </form>
+    </div>
+  );
+};
+
 // === DASHBOARD ===
 const DashboardView = () => {
   const [stats, setStats] = useState(null); const [sessions, setSessions] = useState([]);
@@ -572,6 +850,7 @@ const DashboardView = () => {
 
 // === MAIN APP ===
 const navItems = [
+  { id: 'prompt', icon: Sparkles, label: 'AI Assistant' },
   { id: 'today', icon: Zap, label: 'Today' },
   { id: 'clients', icon: Users, label: 'Clients' },
   { id: 'workouts', icon: Dumbbell, label: 'Workouts' },
@@ -582,18 +861,39 @@ const navItems = [
 ];
 
 function App() {
-  const [tab, setTab] = useState('today');
+  const [tab, setTab] = useState('prompt');
   const [mobileOpen, setMobileOpen] = useState(false);
   const [toast, setToast] = useState(null);
+  const [coachUser, setCoachUser] = useState(() => { try { return JSON.parse(localStorage.getItem('coach_user')); } catch { return null; } });
   const showToast = (msg, type = 'success') => setToast({ message: msg, type });
+
+  useEffect(() => {
+    const handler = (e) => setTab(e.detail);
+    window.addEventListener('navigate-tab', handler);
+    return () => window.removeEventListener('navigate-tab', handler);
+  }, []);
+
+  const handleLogin = async (email, password) => {
+    try {
+      const r = await fetch(`${API_URL}/auth/login`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ email, password }) });
+      const d = await r.json();
+      if (d.success) { localStorage.setItem('coach_user', JSON.stringify(d.user)); setCoachUser(d.user); return true; }
+      else { throw new Error(d.detail || 'Login failed'); }
+    } catch (e) { throw e; }
+  };
+  const handleLogout = () => { localStorage.removeItem('coach_user'); setCoachUser(null); };
+
+  if (!coachUser) return <LoginScreen onLogin={handleLogin} />;
+
   return (
     <div className="min-h-screen bg-slate-50 flex">
       {mobileOpen && <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={() => setMobileOpen(false)} />}
       <aside className={`fixed lg:sticky top-0 left-0 h-screen w-64 bg-white border-r flex flex-col z-50 transition-transform ${mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
-        <div className="p-5 border-b"><div className="flex items-center justify-between"><div className="flex items-center gap-2"><div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold text-lg">F</div><span className="font-bold text-lg">FitLife Coach</span></div><button onClick={() => setMobileOpen(false)} className="lg:hidden"><X size={20} /></button></div></div>
+        <div className="p-5 border-b"><div className="flex items-center justify-between"><div className="flex items-center gap-2"><div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold text-lg">{(coachUser.full_name||'C')[0]}</div><div><span className="font-bold text-sm block">{coachUser.full_name}</span><span className="text-xs text-slate-400">Coach</span></div></div><button onClick={() => setMobileOpen(false)} className="lg:hidden"><X size={20} /></button></div></div>
         <nav className="flex-1 p-3 space-y-1">{navItems.map(item => (
           <button key={item.id} onClick={() => { setTab(item.id); setMobileOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${tab === item.id ? 'bg-blue-50 text-blue-700' : 'text-slate-600 hover:bg-slate-50'}`}><item.icon size={20} />{item.label}</button>
         ))}</nav>
+        <div className="p-3 border-t"><button onClick={handleLogout} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-red-500 hover:bg-red-50">Logout</button></div>
       </aside>
       <div className="flex-1 min-w-0 flex flex-col">
         <header className="bg-white border-b px-6 py-4 flex items-center justify-between sticky top-0 z-30">
@@ -602,6 +902,7 @@ function App() {
           <div className="text-sm text-slate-400">{new Date().toLocaleDateString('en-IN', { weekday: 'short', month: 'short', day: 'numeric' })}</div>
         </header>
         <main className="flex-1 p-6 overflow-auto"><div className="max-w-6xl mx-auto">
+          {tab === 'prompt' && <PromptView showToast={showToast} />}
           {tab === 'today' && <TodayView onNavigate={setTab} showToast={showToast} />}
           {tab === 'clients' && <ClientsView showToast={showToast} />}
           {tab === 'workouts' && <WorkoutsView showToast={showToast} />}
@@ -616,5 +917,31 @@ function App() {
     </div>
   );
 }
+
+const LoginScreen = ({ onLogin }) => {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const handle = async (e) => {
+    e.preventDefault(); setLoading(true); setError('');
+    try { await onLogin(email, password); } catch (err) { setError(err.message); }
+    setLoading(false);
+  };
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-3xl shadow-xl border p-8 w-full max-w-md">
+        <div className="text-center mb-8"><div className="w-14 h-14 rounded-2xl bg-blue-600 text-white flex items-center justify-center font-bold text-2xl mx-auto mb-3">F</div><h1 className="text-2xl font-black">FitLife Coach</h1><p className="text-slate-500 text-sm mt-1">Sign in to your dashboard</p></div>
+        {error && <div className="bg-red-50 text-red-600 px-4 py-3 rounded-xl text-sm mb-4">{error}</div>}
+        <form onSubmit={handle} className="space-y-4">
+          <div><label className="block text-sm font-semibold mb-1">Email</label><input required type="email" value={email} onChange={e=>setEmail(e.target.value)} className="w-full px-4 py-3 rounded-xl border outline-none focus:border-blue-500" /></div>
+          <div><label className="block text-sm font-semibold mb-1">Password</label><input required type="password" value={password} onChange={e=>setPassword(e.target.value)} className="w-full px-4 py-3 rounded-xl border outline-none focus:border-blue-500" /></div>
+          <button type="submit" disabled={loading} className="w-full py-3.5 bg-blue-600 text-white rounded-xl font-bold disabled:opacity-50">{loading ? 'Signing in...' : 'Sign In'}</button>
+        </form>
+        <p className="text-center text-sm text-slate-500 mt-6">Don't have an account? <a href="https://www.coachme.life#register" className="text-blue-600 font-semibold">Register at CoachMe.life</a></p>
+      </div>
+    </div>
+  );
+};
 
 export default App;
