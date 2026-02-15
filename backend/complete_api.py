@@ -1338,3 +1338,35 @@ async def send_personal_reminder(data: dict = Body(...)):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         await conn.close()
+
+
+# ============================================================================
+# AUTH / LOGIN
+# ============================================================================
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+@router.post("/auth/login")
+async def login(data: LoginRequest):
+    conn = await get_db()
+    try:
+        password_hash = hashlib.sha256(data.password.encode()).hexdigest()
+        row = await conn.fetchrow(
+            """SELECT id::text, full_name, email, phone, role, metadata, created_at::text
+               FROM users WHERE email = $1 AND password_hash = $2 AND is_active = true""",
+            data.email, password_hash,
+        )
+        if not row:
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        return {
+            "success": True,
+            "user": dict(row),
+            "message": f"Welcome back, {row['full_name']}!",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await conn.close()
