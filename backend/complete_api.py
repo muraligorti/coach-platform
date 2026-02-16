@@ -631,3 +631,317 @@ async def reset_db(data: dict = Body(...)):
 async def root(): return {"status":"ok","version":"4.0-production"}
 
 app.include_router(router, prefix="/api/v1")
+# ============================================================================
+# COACHFLOW V2 — FIXED ENDPOINTS (uses X-Coach-Id header like existing API)
+# ============================================================================
+
+async def ensure_coach(conn, org_id):
+    """Fallback: get first coach if no header provided."""
+    row = await conn.fetchrow("SELECT id::text FROM users WHERE role='coach' AND is_active=true LIMIT 1")
+    return row["id"] if row else None
+
+# ─── AVAILABILITY ─────────────────────────────────────────────────────────────
+
+@router.get("/availability")
+async def get_availability(x_coach_id: Optional[str] = Header(None)):
+    conn = await get_db()
+    try:
+        org_id = await ensure_org(conn)
+        coach_id = x_coach_id or await ensure_coach(conn, org_id)
+        avail = await conn.fetchrow(
+            "SELECT working_days, recurring_type, end_date::text FROM coach_availability WHERE coach_id = $1::uuid", coach_id)
+        working_days = json.loads(avail["working_days"]) if avail else [0,1,2,3,4]
+        recurring = avail["recurring_type"] if avail else "weekly"
+        slots = await conn.fetch(
+            "SELECT id::text, label, start_time::text, end_time::text FROM coach_availability_slots WHERE coach_id = $1::uuid ORDER BY start_time", coach_id)
+        holidays = await conn.fetch(
+            "SELECT id::text, date::text, type, note FROM coach_holidays WHERE coach_id = $1::uuid ORDER BY date", coach_id)
+        return {"success": True, "working_days": working_days, "recurring_type": recurring, "slots": [dict(s) for s in slots], "holidays": [dict(h) for h in holidays]}
+    except Exception as e:
+        return {"success": True, "working_days": [0,1,2,3,4], "slots": [], "holidays": []}
+    finally:
+        await conn.close()
+
+@router.put("/availability/days")
+async def update_working_days(data: dict = Body(...), x_coach_id: Optional[str] = Header(None)):
+    conn = await get_db()
+    try:
+        org_id = await ensure_org(conn)
+        coach_id = x_coach_id or await ensure_coach(conn, org_id)
+        days = json.dumps(data.get("working_days", [0,1,2,3,4]))
+        recurring = data.get("recurring_type", "weekly")
+        await conn.execute(
+            """INSERT INTO coach_availability (org_id, coach_id, working_days, recurring_type, updated_at)
+               VALUES ($1, $2::uuid, $3::jsonb, $4, NOW())
+               ON CONFLICT (coach_id) DO UPDATE SET working_days = $3::jsonb, recurring_type = $4, updated_at = NOW()""",
+            org_id, coach_id, days, recurring)
+        return {"success": True, "message": "Working days updated"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await conn.close()
+
+@router.post("/availability/slots")
+async def add_slot(data: dict = Body(...), x_coach_id: Optional[str] = Header(None)):
+    conn = await get_db()
+    try:
+        org_id = await ensure_org(conn)
+        coach_id = x_coach_id or await ensure_coach(conn, org_id)
+        row = await conn.fetchrow(
+            """INSERT INTO coach_availability_slots (coach_id, label, start_time, end_time)
+               VALUES ($1::uuid, $2, $3::time, $4::time)
+               RETURNING id::text, label, start_time::text, end_time::text""",
+            coach_id, data.get("label", ""), data["start_time"], data["end_time"])
+        return {"success": True, "slot": dict(row), "message": "Slot added"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await conn.close()
+
+@router.delete("/availability/slots/{slot_id}")
+async def delete_slot(slot_id: str):
+    conn = await get_db()
+    try:
+        await conn.execute("DELETE FROM coach_availability_slots WHERE id = $1::uuid", slot_id)
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await conn.close()
+
+@router.post("/availability/holidays")
+async def add_holiday(data: dict = Body(...), x_coach_id: Optional[str] = Header(None)):
+    conn = await get_db()
+    try:
+        org_id = await ensure_org(conn)
+        coach_id = x_coach_id or await ensure_coach(conn, org_id)
+        row = await conn.fetchrow(
+            """INSERT INTO coach_holidays (coach_id, date, type, note)
+               VALUES ($1::uuid, $2::date, $3, $4)
+               RETURNING id::text, date::text, type, note""",
+            coach_id, data["date"], data.get("type", "holiday"), data.get("note", ""))
+        return {"success": True, "holiday": dict(row)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await conn.close()
+
+@router.delete("/availability/holidays/{hid}")
+async def delete_holiday(hid: str):
+    conn = await get_db()
+    try:
+        await conn.execute("DELETE FROM coach_holidays WHERE id = $1::uuid", hid)
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await conn.close()
+
+# ─── LEADS ────────────────────────────────────────────────────────────────────
+
+@router.get("/leads")
+async def get_leads(x_coach_id: Optional[str] = Header(None)):
+    conn = await get_db()
+    try:
+        org_id = await ensure_org(conn)
+        coach_id = x_coach_id or await ensure_coach(conn, org_id)
+        rows = await conn.fetch(
+            """SELECT id::text, name, phone, email, interest, source, temperature, notes,
+                      converted_client_id::text, created_at::text
+               FROM leads WHERE coach_id = $1::uuid ORDER BY created_at DESC""", coach_id)
+        return {"success": True, "leads": [dict(r) for r in rows]}
+    except:
+        return {"success": True, "leads": []}
+    finally:
+        await conn.close()
+
+@router.post("/leads")
+async def create_lead(data: dict = Body(...), x_coach_id: Optional[str] = Header(None)):
+    conn = await get_db()
+    try:
+        org_id = await ensure_org(conn)
+        coach_id = x_coach_id or await ensure_coach(conn, org_id)
+        row = await conn.fetchrow(
+            """INSERT INTO leads (org_id, coach_id, name, phone, email, interest, source, temperature, notes)
+               VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9)
+               RETURNING id::text, name, phone, interest, source, temperature, created_at::text""",
+            org_id, coach_id, data["name"], data.get("phone",""), data.get("email",""),
+            data.get("interest",""), data.get("source",""), data.get("temperature","warm"), data.get("notes",""))
+        return {"success": True, "lead": dict(row)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await conn.close()
+
+@router.put("/leads/{lid}")
+async def update_lead(lid: str, data: dict = Body(...)):
+    conn = await get_db()
+    try:
+        sets, vals, idx = [], [lid], 2
+        for k in ["name","phone","email","interest","source","temperature","notes"]:
+            if k in data: sets.append(f"{k}=${idx}"); vals.append(data[k]); idx+=1
+        if not sets: return {"success": True}
+        sets.append("updated_at=NOW()")
+        row = await conn.fetchrow(f"UPDATE leads SET {','.join(sets)} WHERE id=$1::uuid RETURNING id::text,name,temperature", *vals)
+        return {"success": True, "lead": dict(row) if row else None}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await conn.close()
+
+@router.delete("/leads/{lid}")
+async def delete_lead(lid: str):
+    conn = await get_db()
+    try:
+        await conn.execute("DELETE FROM leads WHERE id=$1::uuid", lid)
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await conn.close()
+
+@router.post("/leads/{lid}/convert")
+async def convert_lead(lid: str, x_coach_id: Optional[str] = Header(None)):
+    conn = await get_db()
+    try:
+        org_id = await ensure_org(conn)
+        coach_id = x_coach_id or await ensure_coach(conn, org_id)
+        lead = await conn.fetchrow("SELECT * FROM leads WHERE id=$1::uuid", lid)
+        if not lead: raise HTTPException(404, "Lead not found")
+        meta = json.dumps({"coach_id": coach_id, "goal": lead["interest"] or "", "source": lead["source"] or ""})
+        client = await conn.fetchrow(
+            """INSERT INTO users (primary_org_id,full_name,email,phone,role,is_active,is_verified,metadata,created_at)
+               VALUES ($1,$2,$3,$4,'client',true,true,$5::jsonb,NOW()) RETURNING id::text,full_name,email,phone""",
+            org_id, lead["name"], lead["email"] or None, lead["phone"] or None, meta)
+        await conn.execute("UPDATE leads SET temperature='converted',converted_client_id=$1::uuid,updated_at=NOW() WHERE id=$2::uuid", client["id"], lid)
+        return {"success": True, "client": dict(client), "message": f"{lead['name']} converted"}
+    except asyncpg.UniqueViolationError:
+        raise HTTPException(400, "Client with this email/phone exists")
+    except HTTPException: raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    finally:
+        await conn.close()
+
+# ─── PAYMENTS ─────────────────────────────────────────────────────────────────
+
+@router.get("/coach-payments")
+async def get_coach_payments(x_coach_id: Optional[str] = Header(None)):
+    conn = await get_db()
+    try:
+        org_id = await ensure_org(conn)
+        coach_id = x_coach_id or await ensure_coach(conn, org_id)
+        rows = await conn.fetch(
+            """SELECT cp.id::text, cp.amount::text, cp.payment_type, cp.session_count,
+                      cp.sessions_used, cp.billing_start, cp.status, cp.cycle_note,
+                      cp.paid_at::text, cp.created_at::text,
+                      u.full_name as client_name, u.id::text as client_id
+               FROM coach_payments cp JOIN users u ON cp.client_id=u.id
+               WHERE cp.coach_id=$1::uuid ORDER BY cp.created_at DESC""", coach_id)
+        return {"success": True, "payments": [dict(r) for r in rows]}
+    except:
+        return {"success": True, "payments": []}
+    finally:
+        await conn.close()
+
+@router.post("/coach-payments")
+async def create_coach_payment(data: dict = Body(...), x_coach_id: Optional[str] = Header(None)):
+    conn = await get_db()
+    try:
+        org_id = await ensure_org(conn)
+        coach_id = x_coach_id or await ensure_coach(conn, org_id)
+        row = await conn.fetchrow(
+            """INSERT INTO coach_payments (org_id,coach_id,client_id,amount,payment_type,session_count,billing_start,status,cycle_note,paid_at)
+               VALUES ($1,$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9,CASE WHEN $8='paid' THEN NOW() ELSE NULL END)
+               RETURNING id::text, amount::text, payment_type, status, created_at::text""",
+            org_id, coach_id, data["client_id"], float(data["amount"]),
+            data.get("payment_type","monthly"), data.get("session_count"),
+            data.get("billing_start","attendance"), data.get("status","due"), data.get("cycle_note",""))
+        return {"success": True, "payment": dict(row)}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    finally:
+        await conn.close()
+
+@router.put("/coach-payments/{pid}")
+async def update_coach_payment(pid: str, data: dict = Body(...)):
+    conn = await get_db()
+    try:
+        sets, vals, idx = [], [pid], 2
+        for k in ["amount","payment_type","session_count","sessions_used","status","cycle_note"]:
+            if k in data: sets.append(f"{k}=${idx}"); vals.append(float(data[k]) if k=="amount" else data[k]); idx+=1
+        if data.get("status")=="paid": sets.append("paid_at=NOW()")
+        sets.append("updated_at=NOW()")
+        row = await conn.fetchrow(f"UPDATE coach_payments SET {','.join(sets)} WHERE id=$1::uuid RETURNING id::text,status", *vals)
+        return {"success": True, "payment": dict(row) if row else None}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    finally:
+        await conn.close()
+
+@router.delete("/coach-payments/{pid}")
+async def delete_coach_payment(pid: str):
+    conn = await get_db()
+    try:
+        await conn.execute("DELETE FROM coach_payments WHERE id=$1::uuid", pid)
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    finally:
+        await conn.close()
+
+@router.get("/coach-payments/summary")
+async def payment_summary(x_coach_id: Optional[str] = Header(None)):
+    conn = await get_db()
+    try:
+        org_id = await ensure_org(conn)
+        coach_id = x_coach_id or await ensure_coach(conn, org_id)
+        row = await conn.fetchrow(
+            """SELECT COALESCE(SUM(CASE WHEN status='paid' THEN amount ELSE 0 END),0)::text as collected,
+                      COALESCE(SUM(CASE WHEN status!='paid' THEN amount ELSE 0 END),0)::text as pending,
+                      COALESCE(SUM(amount),0)::text as total, COUNT(*)::text as count
+               FROM coach_payments WHERE coach_id=$1::uuid""", coach_id)
+        return {"success": True, "summary": dict(row)}
+    except:
+        return {"success": True, "summary": {"collected":"0","pending":"0","total":"0","count":"0"}}
+    finally:
+        await conn.close()
+
+# ─── ENHANCED SESSIONS ────────────────────────────────────────────────────────
+
+@router.put("/sessions/{sid}/reschedule")
+async def reschedule_session(sid: str, data: dict = Body(...)):
+    conn = await get_db()
+    try:
+        new_dt = parse_dt(f"{data['new_date']}T{data['new_time']}")
+        row = await conn.fetchrow(
+            """UPDATE scheduled_sessions SET scheduled_at=$1, status='scheduled', updated_at=NOW()
+               WHERE id=$2::uuid RETURNING id::text, scheduled_at::text, status""",
+            new_dt, sid)
+        return {"success": True, "session": dict(row) if row else None}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    finally:
+        await conn.close()
+
+# ─── CLIENT UPDATE ────────────────────────────────────────────────────────────
+
+@router.put("/clients/{cid}")
+async def update_client(cid: str, data: dict = Body(...)):
+    conn = await get_db()
+    try:
+        sets, vals, idx = [], [cid], 2
+        if "name" in data: sets.append(f"full_name=${idx}"); vals.append(data["name"]); idx+=1
+        if "email" in data: sets.append(f"email=${idx}"); vals.append(data["email"]); idx+=1
+        if "phone" in data: sets.append(f"phone=${idx}"); vals.append(data["phone"]); idx+=1
+        meta_updates = {k:data[k] for k in ["goal","level","type","weight","height","medical"] if k in data}
+        if meta_updates:
+            sets.append(f"metadata=COALESCE(metadata,'{{}}'::jsonb)||${idx}::jsonb")
+            vals.append(json.dumps(meta_updates)); idx+=1
+        sets.append("updated_at=NOW()")
+        row = await conn.fetchrow(f"UPDATE users SET {','.join(sets)} WHERE id=$1::uuid RETURNING id::text,full_name as name,email,phone,metadata", *vals)
+        return {"success": True, "client": dict(row) if row else None}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    finally:
+        await conn.close()
