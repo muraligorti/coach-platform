@@ -175,6 +175,27 @@ async def delete_client(cid: str):
     except Exception as e: raise HTTPException(500, str(e))
     finally: await conn.close()
 
+@router.put("/clients/{cid}")
+async def update_client(cid: str, data: dict = Body(...)):
+    conn = await get_db()
+    try:
+        sets, vals, idx = [], [cid], 2
+        if "name" in data and data["name"]:
+            sets.append(f"full_name=${idx}"); vals.append(data["name"]); idx+=1
+        if "email" in data:
+            sets.append(f"email=${idx}"); vals.append(data["email"] or None); idx+=1
+        if "phone" in data:
+            sets.append(f"phone=${idx}"); vals.append(data["phone"] or None); idx+=1
+        meta_updates = {k: data[k] for k in ["goal","type","weight","height","level","medical"] if k in data and data[k]}
+        if meta_updates:
+            sets.append(f"metadata=COALESCE(metadata,'{{}}'::jsonb)||${idx}::jsonb")
+            vals.append(json.dumps(meta_updates)); idx+=1
+        if not sets: return {"success": True}
+        row = await conn.fetchrow(f"UPDATE users SET {','.join(sets)} WHERE id=$1::uuid RETURNING id::text,full_name as name,email,phone,metadata", *vals)
+        return {"success": True, "client": dict(row) if row else None}
+    except Exception as e: raise HTTPException(500, str(e))
+    finally: await conn.close()
+
 @router.post("/clients/bulk-import")
 async def bulk_import_clients(data: dict = Body(...), x_coach_id: Optional[str] = Header(None)):
     conn = await get_db()
@@ -680,7 +701,7 @@ async def add_holiday(data: dict = Body(...), x_coach_id: Optional[str]=Header(N
         if not coach_id: raise HTTPException(400, "Valid coach ID required")
         row = await conn.fetchrow(
             "INSERT INTO coach_holidays (coach_id,holiday_date,reason) VALUES ($1::uuid,$2,$3) RETURNING id::text,holiday_date::text,reason",
-            coach_id, data["date"], data.get("reason",""))
+            coach_id, parse_dt(data["date"]).date() if isinstance(data["date"], str) else data["date"], data.get("reason",""))
         return {"success":True,"holiday":dict(row)}
     except Exception as e: raise HTTPException(500, str(e))
     finally: await conn.close()
