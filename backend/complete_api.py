@@ -780,17 +780,45 @@ async def client_register(data: dict = Body(...)):
         await ensure_tables(conn)
         email = data.get("email","").strip().lower()
         if not email: raise HTTPException(400, "Email required")
-        existing = await conn.fetchrow("SELECT id FROM users WHERE email=$1 AND role='client'", email)
-        if existing: raise HTTPException(400, "Email already registered. Please login.")
         pw = hashlib.sha256(data.get("password","").encode()).hexdigest()
-        meta = json.dumps({k: data.get(k,"") for k in ["goal","type","weight","height","injuries","diet"] if data.get(k)})
-        org_id = await ensure_org(conn)
-        row = await conn.fetchrow(
-            """INSERT INTO users (primary_org_id,full_name,email,phone,password_hash,role,metadata,is_active,is_verified,created_at)
-               VALUES ($1,$2,$3,$4,$5,'client',$6::jsonb,true,true,NOW())
-               RETURNING id::text,full_name as name,email,phone,metadata""",
-            org_id, data.get("name",""), email, data.get("phone",""), pw, meta)
-        return {"success": True, "client": dict(row)}
+        meta_new = {k: data.get(k,"") for k in ["goal","type","weight","height","injuries","diet"] if data.get(k)}
+        existing = await conn.fetchrow("SELECT id::text,full_name as name,email,phone,password_hash,metadata FROM users WHERE LOWER(email)=$1 AND role='client'", email)
+        if existing:
+            # Client already added by coach — let them claim by setting password
+            if existing["password_hash"] and existing["password_hash"] != '':
+                raise HTTPException(400, "Account already has a password. Please login instead.")
+            # Merge metadata
+            old_meta = {}
+            if existing["metadata"]:
+                old_meta = json.loads(existing["metadata"]) if isinstance(existing["metadata"], str) else dict(existing["metadata"])
+            old_meta.update(meta_new)
+            # Set password and update details
+            updates = ["password_hash=$2"]
+            vals = [existing["id"], pw]
+            idx = 3
+            if data.get("name") and not existing["name"]:
+                updates.append(f"full_name=${idx}"); vals.append(data["name"]); idx+=1
+            if data.get("phone") and not existing["phone"]:
+                updates.append(f"phone=${idx}"); vals.append(data["phone"]); idx+=1
+            updates.append(f"metadata=${idx}::jsonb"); vals.append(json.dumps(old_meta)); idx+=1
+            row = await conn.fetchrow(
+                f"UPDATE users SET {','.join(updates)} WHERE id=$1::uuid RETURNING id::text,full_name as name,email,phone,metadata",
+                *vals)
+            client = dict(row)
+            if isinstance(client.get("metadata"), str):
+                try: client["metadata"] = json.loads(client["metadata"])
+                except: client["metadata"] = {}
+            return {"success": True, "client": client, "message": "Account activated! Welcome."}
+        else:
+            # Brand new client self-registration
+            org_id = await ensure_org(conn)
+            meta = json.dumps(meta_new)
+            row = await conn.fetchrow(
+                """INSERT INTO users (primary_org_id,full_name,email,phone,password_hash,role,metadata,is_active,is_verified,created_at)
+                   VALUES ($1,$2,$3,$4,$5,'client',$6::jsonb,true,true,NOW())
+                   RETURNING id::text,full_name as name,email,phone,metadata""",
+                org_id, data.get("name",""), email, data.get("phone",""), pw, meta)
+            return {"success": True, "client": dict(row)}
     except HTTPException: raise
     except Exception as e: raise HTTPException(500, str(e))
     finally: await conn.close()
@@ -808,8 +836,11 @@ async def client_login(data: dict = Body(...)):
             "SELECT id::text,full_name as name,email,phone,password_hash,metadata FROM users WHERE LOWER(email)=$1 AND role='client' AND is_active=true AND deleted_at IS NULL",
             email)
         if not row: raise HTTPException(401, "Account not found. Check email or register first.")
+        has_password = row["password_hash"] and row["password_hash"] != ''
         # Auth: password OR phone last 4 digits
         if password:
+            if not has_password:
+                raise HTTPException(401, "No password set. Please use the Register tab to activate your account.")
             pw_hash = hashlib.sha256(password.encode()).hexdigest()
             if row["password_hash"] != pw_hash:
                 raise HTTPException(401, "Invalid password")
@@ -833,10 +864,16 @@ async def client_dashboard(cid: str):
     conn = await get_db()
     try:
         await ensure_tables(conn)
-        now_str = datetime.now().strftime("%Y-%m-%d")
+        from datetime import timezone, timedelta
+        ist = timezone(timedelta(hours=5, minutes=30))
+        now_str = datetime.now(ist).strftime("%Y-%m-%d")
         sessions = await conn.fetch(
-            """SELECT id::text,scheduled_at::text,duration_minutes,status,location,workout_name,cancelled_reason
-               FROM scheduled_sessions WHERE client_id=$1::uuid AND deleted_at IS NULL ORDER BY scheduled_at DESC""", cid)
+            """SELECT ss.id::text,ss.scheduled_at::text,ss.duration_minutes,ss.status,ss.location,ss.cancelled_reason,
+                      st.name as workout_name, c.full_name as coach_name
+               FROM scheduled_sessions ss
+               LEFT JOIN session_templates st ON ss.session_template_id=st.id
+               LEFT JOIN users c ON ss.coach_id=c.id
+               WHERE ss.client_id=$1::uuid AND ss.deleted_at IS NULL ORDER BY ss.scheduled_at DESC""", cid)
         all_s = [dict(r) for r in sessions]
         upcoming = [s for s in all_s if (s["scheduled_at"] or "")[:10] >= now_str and s["status"] not in ('cancelled','cancel_requested')]
         past = [s for s in all_s if (s["scheduled_at"] or "")[:10] < now_str or s["status"] in ('completed','confirmed','no_show')]
@@ -844,14 +881,38 @@ async def client_dashboard(cid: str):
         absent = len([s for s in past if s["status"]=='no_show'])
         total = attended + absent
         rate = round(attended/total*100) if total else 0
+        # Coach info
+        coach_name = all_s[0]["coach_name"] if all_s and all_s[0].get("coach_name") else None
+        # Also try from user metadata
+        if not coach_name:
+            try:
+                user = await conn.fetchrow("SELECT metadata FROM users WHERE id=$1::uuid", cid)
+                if user and user["metadata"]:
+                    meta = json.loads(user["metadata"]) if isinstance(user["metadata"], str) else user["metadata"]
+                    if meta.get("coach_id"):
+                        crow = await conn.fetchrow("SELECT full_name FROM users WHERE id=$1::uuid", meta["coach_id"])
+                        if crow: coach_name = crow["full_name"]
+            except: pass
         # Progress
         progress = []
         try:
             rows = await conn.fetch("SELECT metrics,recorded_at::text FROM progress_records WHERE client_id=$1::uuid ORDER BY recorded_at DESC LIMIT 10", cid)
             progress = [dict(r) for r in rows]
         except: pass
+        # Mapped workouts (from session_templates used in sessions)
+        workouts = []
+        try:
+            wrows = await conn.fetch(
+                """SELECT DISTINCT st.id::text, st.name, st.category FROM session_templates st
+                   INNER JOIN scheduled_sessions ss ON ss.session_template_id=st.id
+                   WHERE ss.client_id=$1::uuid AND st.name IS NOT NULL""", cid)
+            workouts = [dict(r) for r in wrows]
+        except: pass
         return {"success": True, "upcoming": upcoming[:20], "past": past[:50], "progress": progress,
+                "workouts": workouts, "coach_name": coach_name,
                 "stats": {"attended": attended, "absent": absent, "rate": rate, "upcoming_count": len(upcoming)}}
+    except Exception as e: raise HTTPException(500, str(e))
+    finally: await conn.close()
     except Exception as e: raise HTTPException(500, str(e))
     finally: await conn.close()
 
