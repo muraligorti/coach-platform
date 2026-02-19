@@ -279,7 +279,7 @@ async def get_sessions(client_id: Optional[str]=None, x_coach_id: Optional[str]=
     conn = await get_db()
     try:
         coach_id = await get_coach_id(x_coach_id, conn)
-        q = """SELECT ss.id::text,ss.scheduled_at::text,ss.duration_minutes,ss.status,ss.notes,ss.coach_id::text,ss.client_id::text,
+        q = """SELECT ss.id::text,ss.scheduled_at::text,ss.duration_minutes,ss.status,ss.notes,ss.coach_id::text,ss.client_id::text,ss.location,ss.cancelled_reason,
                       u.full_name as client_name,st.name as workout_name FROM scheduled_sessions ss
                LEFT JOIN users u ON ss.client_id=u.id LEFT JOIN session_templates st ON ss.session_template_id=st.id WHERE 1=1"""
         p = []
@@ -384,7 +384,7 @@ async def get_today(x_coach_id: Optional[str]=Header(None)):
     try:
         coach_id = await get_coach_id(x_coach_id, conn)
         today = datetime.now().strftime("%Y-%m-%d")
-        q = """SELECT ss.id::text,ss.scheduled_at::text,ss.duration_minutes,ss.status,ss.notes,ss.coach_id::text,ss.client_id::text,
+        q = """SELECT ss.id::text,ss.scheduled_at::text,ss.duration_minutes,ss.status,ss.notes,ss.coach_id::text,ss.client_id::text,ss.location,ss.cancelled_reason,
                       u.full_name as client_name,st.name as workout_name FROM scheduled_sessions ss
                LEFT JOIN users u ON ss.client_id=u.id LEFT JOIN session_templates st ON ss.session_template_id=st.id
                WHERE ss.scheduled_at::date=$1::date"""
@@ -783,8 +783,8 @@ async def client_register(data: dict = Body(...)):
         meta = json.dumps({k: data.get(k,"") for k in ["goal","type","weight","height","injuries","diet"] if data.get(k)})
         org_id = await ensure_org(conn)
         row = await conn.fetchrow(
-            """INSERT INTO users (org_id,full_name,email,phone,password_hash,role,metadata,is_active)
-               VALUES ($1,$2,$3,$4,$5,'client',$6::jsonb,true)
+            """INSERT INTO users (primary_org_id,full_name,email,phone,password_hash,role,metadata,is_active,is_verified,created_at)
+               VALUES ($1,$2,$3,$4,$5,'client',$6::jsonb,true,true,NOW())
                RETURNING id::text,full_name as name,email,phone,metadata""",
             org_id, data.get("name",""), email, data.get("phone",""), pw, meta)
         return {"success": True, "client": dict(row)}
