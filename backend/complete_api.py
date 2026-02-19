@@ -769,4 +769,115 @@ async def update_client_metadata(cid: str, data: dict = Body(...), x_coach_id: O
     except Exception as e: raise HTTPException(500, str(e))
     finally: await conn.close()
 
+# ─── CLIENT AUTH & PORTAL ENDPOINTS ──────────────────
+@router.post("/auth/client-register")
+async def client_register(data: dict = Body(...)):
+    conn = await get_db()
+    try:
+        await ensure_tables(conn)
+        email = data.get("email","").strip().lower()
+        if not email: raise HTTPException(400, "Email required")
+        existing = await conn.fetchrow("SELECT id FROM users WHERE email=$1 AND role='client'", email)
+        if existing: raise HTTPException(400, "Email already registered. Please login.")
+        pw = hashlib.sha256(data.get("password","").encode()).hexdigest()
+        meta = json.dumps({k: data.get(k,"") for k in ["goal","type","weight","height","injuries","diet"] if data.get(k)})
+        org_id = await ensure_org(conn)
+        row = await conn.fetchrow(
+            """INSERT INTO users (org_id,full_name,email,phone,password_hash,role,metadata,is_active)
+               VALUES ($1,$2,$3,$4,$5,'client',$6::jsonb,true)
+               RETURNING id::text,full_name as name,email,phone,metadata""",
+            org_id, data.get("name",""), email, data.get("phone",""), pw, meta)
+        return {"success": True, "client": dict(row)}
+    except HTTPException: raise
+    except Exception as e: raise HTTPException(500, str(e))
+    finally: await conn.close()
+
+@router.post("/auth/client-login")
+async def client_login(data: dict = Body(...)):
+    conn = await get_db()
+    try:
+        await ensure_tables(conn)
+        email = data.get("email","").strip().lower()
+        phone_last4 = data.get("phone","").strip()
+        password = data.get("password","").strip()
+        if not email: raise HTTPException(400, "Email required")
+        row = await conn.fetchrow(
+            "SELECT id::text,full_name as name,email,phone,password_hash,metadata FROM users WHERE LOWER(email)=$1 AND role='client' AND is_active=true AND deleted_at IS NULL",
+            email)
+        if not row: raise HTTPException(401, "Account not found. Check email or register first.")
+        # Auth: password OR phone last 4 digits
+        if password:
+            pw_hash = hashlib.sha256(password.encode()).hexdigest()
+            if row["password_hash"] != pw_hash:
+                raise HTTPException(401, "Invalid password")
+        elif phone_last4:
+            if not (row["phone"] or "").endswith(phone_last4):
+                raise HTTPException(401, "Phone digits don't match")
+        else:
+            raise HTTPException(400, "Password or phone digits required")
+        client = dict(row)
+        del client["password_hash"]
+        if isinstance(client.get("metadata"), str):
+            try: client["metadata"] = json.loads(client["metadata"])
+            except: client["metadata"] = {}
+        return {"success": True, "client": client}
+    except HTTPException: raise
+    except Exception as e: raise HTTPException(500, str(e))
+    finally: await conn.close()
+
+@router.get("/client/{cid}/dashboard")
+async def client_dashboard(cid: str):
+    conn = await get_db()
+    try:
+        await ensure_tables(conn)
+        now_str = datetime.now().strftime("%Y-%m-%d")
+        sessions = await conn.fetch(
+            """SELECT id::text,scheduled_at::text,duration_minutes,status,location,workout_name,cancelled_reason
+               FROM scheduled_sessions WHERE client_id=$1::uuid AND deleted_at IS NULL ORDER BY scheduled_at DESC""", cid)
+        all_s = [dict(r) for r in sessions]
+        upcoming = [s for s in all_s if (s["scheduled_at"] or "")[:10] >= now_str and s["status"] not in ('cancelled','cancel_requested')]
+        past = [s for s in all_s if (s["scheduled_at"] or "")[:10] < now_str or s["status"] in ('completed','confirmed','no_show')]
+        attended = len([s for s in past if s["status"] in ('confirmed','completed')])
+        absent = len([s for s in past if s["status"]=='no_show'])
+        total = attended + absent
+        rate = round(attended/total*100) if total else 0
+        # Progress
+        progress = []
+        try:
+            rows = await conn.fetch("SELECT metrics,recorded_at::text FROM progress_records WHERE client_id=$1::uuid ORDER BY recorded_at DESC LIMIT 10", cid)
+            progress = [dict(r) for r in rows]
+        except: pass
+        return {"success": True, "upcoming": upcoming[:20], "past": past[:50], "progress": progress,
+                "stats": {"attended": attended, "absent": absent, "rate": rate, "upcoming_count": len(upcoming)}}
+    except Exception as e: raise HTTPException(500, str(e))
+    finally: await conn.close()
+
+@router.get("/client/{cid}/payments")
+async def client_payments(cid: str):
+    conn = await get_db()
+    try:
+        rows = await conn.fetch(
+            """SELECT id::text,amount,currency,status,description,payment_link,created_at::text
+               FROM payments WHERE client_id=$1::uuid ORDER BY created_at DESC LIMIT 50""", cid)
+        return {"success": True, "payments": [dict(r) for r in rows]}
+    except:
+        return {"success": True, "payments": []}
+    finally: await conn.close()
+
+@router.post("/sessions/{sid}/cancel-request")
+async def cancel_request(sid: str, data: dict = Body(...)):
+    conn = await get_db()
+    try:
+        row = await conn.fetchrow("SELECT status FROM scheduled_sessions WHERE id=$1::uuid", sid)
+        if not row: raise HTTPException(404, "Session not found")
+        if row["status"] in ('cancelled','completed','confirmed','no_show'):
+            raise HTTPException(400, f"Cannot cancel session with status '{row['status']}'")
+        await conn.execute(
+            "UPDATE scheduled_sessions SET status='cancel_requested',cancelled_reason=$1 WHERE id=$2::uuid",
+            data.get("reason","Client requested cancellation"), sid)
+        return {"success": True, "message": "Cancel request sent to coach"}
+    except HTTPException: raise
+    except Exception as e: raise HTTPException(500, str(e))
+    finally: await conn.close()
+
 app.include_router(router, prefix="/api/v1")
