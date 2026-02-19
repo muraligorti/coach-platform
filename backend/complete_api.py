@@ -383,7 +383,10 @@ async def get_today(x_coach_id: Optional[str]=Header(None)):
     conn = await get_db()
     try:
         coach_id = await get_coach_id(x_coach_id, conn)
-        today = datetime.now().strftime("%Y-%m-%d")
+        # Use IST for "today" since users are in India
+        from datetime import timezone, timedelta
+        ist = timezone(timedelta(hours=5, minutes=30))
+        today = datetime.now(ist).strftime("%Y-%m-%d")
         q = """SELECT ss.id::text,ss.scheduled_at::text,ss.duration_minutes,ss.status,ss.notes,ss.coach_id::text,ss.client_id::text,ss.location,ss.cancelled_reason,
                       u.full_name as client_name,st.name as workout_name FROM scheduled_sessions ss
                LEFT JOIN users u ON ss.client_id=u.id LEFT JOIN session_templates st ON ss.session_template_id=st.id
