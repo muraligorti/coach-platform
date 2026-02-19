@@ -634,14 +634,13 @@ async def root(): return {"status":"ok","version":"4.0-production"}
 # Add BEFORE the line:  app.include_router(router, prefix="/api/v1")
 # ══════════════════════════════════════════════════════════════
 
-@router.get("/progress/{client_id}")
+@@router.get("/progress/{client_id}")
 async def get_progress(client_id: str, x_coach_id: Optional[str] = Header(None)):
-    """Get all progress records for a client, newest first."""
     conn = await get_db()
     try:
+        await ensure_tables(conn)
         rows = await conn.fetch(
-            """SELECT id::text, record_type, metrics, notes, recorded_at::text, created_at::text
-               FROM progress_records WHERE client_id=$1::uuid ORDER BY recorded_at DESC""",
+            "SELECT id::text, record_type, metrics, notes, recorded_at::text, created_at::text FROM progress_records WHERE client_id=$1::uuid ORDER BY recorded_at DESC",
             client_id)
         return {"success": True, "records": [dict(r) for r in rows]}
     except:
@@ -649,10 +648,8 @@ async def get_progress(client_id: str, x_coach_id: Optional[str] = Header(None))
     finally:
         await conn.close()
 
-
 @router.put("/clients/{cid}/metadata")
 async def update_client_metadata(cid: str, data: dict = Body(...), x_coach_id: Optional[str] = Header(None)):
-    """Update client metadata — merges new fields into existing JSONB."""
     conn = await get_db()
     try:
         row = await conn.fetchrow("SELECT metadata FROM users WHERE id=$1::uuid", cid)
@@ -661,8 +658,7 @@ async def update_client_metadata(cid: str, data: dict = Body(...), x_coach_id: O
         if row["metadata"]:
             current = json.loads(row["metadata"]) if isinstance(row["metadata"], str) else dict(row["metadata"])
         for k, v in data.items():
-            if k != "id":
-                current[k] = v
+            if k != "id": current[k] = v
         await conn.execute("UPDATE users SET metadata=$1::jsonb WHERE id=$2::uuid", json.dumps(current), cid)
         return {"success": True, "metadata": current}
     except HTTPException: raise
