@@ -13,7 +13,7 @@ def parse_dt(s):
     raise ValueError(f"Cannot parse datetime: {s}")
 
 app = FastAPI(title="Coach Platform API", version="4.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=["https://www.coachme.life","https://coachme.life","https://coachfront49992.z29.web.core.windows.net","https://coachfront49992.z13.web.core.windows.net","http://localhost:3000","http://localhost:5500","http://127.0.0.1:5500"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 router = APIRouter()
 
 DB_CONFIG = dict(
@@ -911,8 +911,6 @@ async def client_dashboard(cid: str):
         return {"success": True, "upcoming": upcoming[:20], "past": past[:50], "progress": progress,
                 "workouts": workouts, "coach_name": coach_name,
                 "stats": {"attended": attended, "absent": absent, "rate": rate, "upcoming_count": len(upcoming)}}
-    except Exception as e: raise HTTPException(500, str(e))
-    finally: await conn.close()
     except Exception as e: raise HTTPException(500, str(e))
     finally: await conn.close()
 
