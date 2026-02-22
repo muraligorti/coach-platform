@@ -73,6 +73,11 @@ async def ensure_tables(conn):
         record_type VARCHAR(50) DEFAULT 'measurement',
         metrics JSONB DEFAULT '{}', notes TEXT,
         recorded_at TIMESTAMPTZ DEFAULT NOW(), created_at TIMESTAMPTZ DEFAULT NOW())""")
+    # Allow cancel_requested status in scheduled_sessions
+    try: await conn.execute("ALTER TABLE scheduled_sessions DROP CONSTRAINT IF EXISTS scheduled_sessions_status_check")
+    except: pass
+    try: await conn.execute("ALTER TABLE scheduled_sessions ADD CONSTRAINT scheduled_sessions_status_check CHECK (status IN ('scheduled','confirmed','completed','cancelled','no_show','cancel_requested'))")
+    except: pass
 
 async def get_coach_id(request_coach_id: Optional[str], conn) -> Optional[str]:
     """Validate coach_id exists in users table. Returns None if invalid."""
