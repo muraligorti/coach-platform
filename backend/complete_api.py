@@ -949,4 +949,131 @@ async def cancel_request(sid: str, data: dict = Body(...)):
     except Exception as e: raise HTTPException(500, str(e))
     finally: await conn.close()
 
+@router.post("/ai/command")
+async def ai_command(data: dict = Body(...), x_coach_id: Optional[str] = Header(None)):
+    """AI agent proxy - forwards to Anthropic API and returns structured response"""
+    import urllib.request, ssl
+    conn = await get_db()
+    try:
+        coach_id = await get_coach_id(x_coach_id, conn)
+        coach = await conn.fetchrow("SELECT full_name FROM users WHERE id=$1::uuid", coach_id) if coach_id else None
+        coach_name = coach["full_name"] if coach else "Coach"
+
+        # Gather context
+        clients = await conn.fetch("SELECT id::text,full_name as name,email,phone,metadata FROM users WHERE role='client' AND is_active=true AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 50")
+        clients_list = [{"id":r["id"],"name":r["name"],"email":r["email"],"phone":r["phone"],"metadata":json.loads(r["metadata"]) if isinstance(r["metadata"],str) else dict(r["metadata"]) if r["metadata"] else {}} for r in clients]
+
+        from datetime import timezone
+        ist = timezone(timedelta(hours=5, minutes=30))
+        now = datetime.now(ist)
+        today_str = now.strftime("%Y-%m-%d")
+        day_names = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
+
+        today_sessions = await conn.fetch(
+            """SELECT ss.id::text,ss.scheduled_at::text,ss.status,ss.location,u.full_name as client_name,ss.client_id::text
+               FROM scheduled_sessions ss LEFT JOIN users u ON ss.client_id=u.id
+               WHERE ss.scheduled_at::date=$1::date AND ss.coach_id=$2::uuid ORDER BY ss.scheduled_at""",
+            now.date(), coach_id) if coach_id else []
+        today_list = [dict(r) for r in today_sessions]
+
+        recent_sessions = await conn.fetch(
+            """SELECT ss.id::text,ss.scheduled_at::text,ss.status,ss.location,u.full_name as client_name,ss.client_id::text
+               FROM scheduled_sessions ss LEFT JOIN users u ON ss.client_id=u.id
+               WHERE ss.coach_id=$1::uuid ORDER BY ss.scheduled_at DESC LIMIT 60""",
+            coach_id) if coach_id else []
+        recent_list = [dict(r) for r in recent_sessions]
+
+        prompt = data.get("prompt","")
+        history = data.get("history",[])
+
+        system_prompt = f"""You are CoachFlow AI, an assistant for a fitness coach platform. You help manage clients, schedule sessions, and mark attendance.
+
+CURRENT CONTEXT:
+- Today: {today_str} ({day_names[now.weekday()]})
+- Current time: {now.strftime('%H:%M')} IST
+- Coach: {coach_name} (ID: {coach_id})
+- Clients ({len(clients_list)}): {json.dumps(clients_list)}
+- Today's sessions ({len(today_list)}): {json.dumps(today_list)}
+- Recent sessions: {json.dumps(recent_list[:40])}
+
+You MUST respond ONLY in valid JSON. No markdown, no backticks, no text before/after. Schema:
+{{
+  "message": "Human-friendly summary of what you did/will do",
+  "actions": [
+    {{
+      "type": "add_client" | "schedule_session" | "mark_attendance" | "cancel_session" | "update_client" | "none",
+      "params": {{ ... }}
+    }}
+  ]
+}}
+
+ACTION PARAMS:
+- add_client: {{"name":"...","email":"...","phone":"...","type":"Online|Offline","goal":"..."}}
+  name is mandatory. If email/phone not provided, use empty string.
+- schedule_session: {{"client_id":"uuid","date":"YYYY-MM-DD","time":"HH:MM","duration":60,"location":"online|offline"}}
+  Resolve client name to client_id from context. Calculate relative dates from today {today_str}.
+- mark_attendance: {{"session_id":"uuid","status":"present|absent"}}
+  Resolve from today's/recent sessions. For "mark all today present", one action per session.
+- cancel_session: {{"session_id":"uuid","reason":"..."}}
+- update_client: {{"client_id":"uuid","name":"...","phone":"...","type":"...","goal":"..."}}
+  Only include fields being updated.
+- none: {{}} (for questions/info only)
+
+RULES:
+1. Resolve names to IDs from the client list. Use fuzzy matching.
+2. Relative dates: "tomorrow" = day after {today_str}, "next Monday" = calculate from today.
+3. For bulk ops, create multiple actions in the array.
+4. If a client name doesn't match anyone, use add_client.
+5. Default time: 07:00. Default duration: 60 min. Default location: match client type or 'offline'.
+6. Be smart: "Schedule Aparna at 5pm for 3 days" = 3 separate schedule_session actions on consecutive days.
+7. "mark all present today" = one mark_attendance per today's session with status 'scheduled'.
+8. NEVER ask for clarification if you can infer. Just do it.
+9. Keep message concise with emoji."""
+
+        messages = []
+        for h_msg in history[-6:]:
+            messages.append({"role": h_msg.get("role","user"), "content": h_msg.get("content","")})
+        messages.append({"role": "user", "content": prompt})
+
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            raise HTTPException(500, "ANTHROPIC_API_KEY not configured")
+
+        req_body = json.dumps({
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 2000,
+            "system": system_prompt,
+            "messages": messages
+        }).encode()
+
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=req_body,
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01"
+            },
+            method="POST"
+        )
+        ctx = ssl.create_default_context()
+        with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+            result = json.loads(resp.read().decode())
+
+        raw_text = "".join(c.get("text","") for c in result.get("content",[]))
+        # Parse JSON from response
+        cleaned = raw_text.replace("```json","").replace("```","").strip()
+        try:
+            parsed = json.loads(cleaned)
+        except:
+            parsed = {"message": raw_text, "actions": []}
+
+        return {"success": True, "response": parsed, "raw": raw_text}
+
+    except HTTPException: raise
+    except Exception as e:
+        return {"success": False, "detail": str(e), "response": {"message": f"Error: {str(e)}", "actions": []}}
+    finally:
+        await conn.close()
+
 app.include_router(router, prefix="/api/v1")
