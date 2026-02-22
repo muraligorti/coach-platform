@@ -145,11 +145,13 @@ async def create_client(data: dict = Body(...), x_coach_id: Optional[str] = Head
     try:
         org_id = await ensure_org(conn)
         coach_id = await get_coach_id(x_coach_id, conn)
-        meta = json.dumps({"coach_id": coach_id}) if coach_id else "{}"
+        meta = {"coach_id": coach_id} if coach_id else {}
+        for k in ["goal","type","weight","height","injuries","diet","notes"]:
+            if data.get(k): meta[k] = data[k]
         row = await conn.fetchrow(
             """INSERT INTO users (primary_org_id,full_name,email,phone,role,is_active,is_verified,metadata,created_at)
-               VALUES ($1,$2,$3,$4,'client',true,true,$5::jsonb,NOW()) RETURNING id::text,full_name as name,email,phone,created_at::text""",
-            org_id, data.get("name","Unknown"), data.get("email"), data.get("phone"), meta)
+               VALUES ($1,$2,$3,$4,'client',true,true,$5::jsonb,NOW()) RETURNING id::text,full_name as name,email,phone,metadata,created_at::text""",
+            org_id, data.get("name","Unknown"), data.get("email"), data.get("phone"), json.dumps(meta))
         return {"success":True,"client":dict(row)}
     except asyncpg.UniqueViolationError: raise HTTPException(400, "Client with this email/phone exists")
     except Exception as e: raise HTTPException(500, str(e))
@@ -873,7 +875,7 @@ async def client_dashboard(cid: str):
                FROM scheduled_sessions ss
                LEFT JOIN session_templates st ON ss.session_template_id=st.id
                LEFT JOIN users c ON ss.coach_id=c.id
-               WHERE ss.client_id=$1::uuid AND ss.deleted_at IS NULL ORDER BY ss.scheduled_at DESC""", cid)
+               WHERE ss.client_id=$1::uuid ORDER BY ss.scheduled_at DESC""", cid)
         all_s = [dict(r) for r in sessions]
         upcoming = [s for s in all_s if (s["scheduled_at"] or "")[:10] >= now_str and s["status"] not in ('cancelled','cancel_requested')]
         past = [s for s in all_s if (s["scheduled_at"] or "")[:10] < now_str or s["status"] in ('completed','confirmed','no_show')]
