@@ -949,6 +949,43 @@ async def cancel_request(sid: str, data: dict = Body(...)):
     except Exception as e: raise HTTPException(500, str(e))
     finally: await conn.close()
 
+@router.post("/auth/reset-password")
+async def reset_password(data: dict = Body(...)):
+    """Reset password - verify email + phone last 4 digits, then set new password"""
+    conn = await get_db()
+    try:
+        email = (data.get("email","")).strip().lower()
+        phone_verify = (data.get("phone_last4","")).strip()
+        new_password = data.get("new_password","").strip()
+        role = data.get("role", "coach")  # 'coach' or 'client'
+        
+        if not email or not new_password:
+            raise HTTPException(400, "Email and new password required")
+        if len(new_password) < 4:
+            raise HTTPException(400, "Password must be at least 4 characters")
+        
+        row = await conn.fetchrow(
+            "SELECT id::text, full_name, phone FROM users WHERE LOWER(email)=$1 AND role=$2",
+            email, role)
+        if not row:
+            raise HTTPException(404, f"No {role} found with this email")
+        
+        # If phone_last4 provided, verify it
+        stored_phone = row["phone"] or ""
+        if phone_verify:
+            if not stored_phone.endswith(phone_verify):
+                raise HTTPException(400, "Phone verification failed")
+        elif stored_phone and len(stored_phone) >= 4:
+            # Phone exists but no verification provided - require it
+            raise HTTPException(400, "Please enter last 4 digits of your registered phone for verification")
+        
+        pw_hash = hashlib.sha256(new_password.encode()).hexdigest()
+        await conn.execute("UPDATE users SET password_hash=$1 WHERE id=$2::uuid", pw_hash, row["id"])
+        return {"success": True, "message": "Password reset successfully. Please sign in with your new password."}
+    except HTTPException: raise
+    except Exception as e: raise HTTPException(500, str(e))
+    finally: await conn.close()
+
 @router.post("/ai/command")
 async def ai_command(data: dict = Body(...), x_coach_id: Optional[str] = Header(None)):
     """AI agent proxy - forwards to Anthropic API and returns structured response"""
